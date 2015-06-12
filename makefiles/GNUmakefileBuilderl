@@ -24,26 +24,29 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #-------------------------------------------------------------------------------
 
-## Change accordingly
+## Defaults, change if needed
+#-------------------------------------------------------------------------------
 # Where builderl should be located in the project tree
-BLDERLPATH := deps/builderl/
+BLDERLPATH ?= deps/builderl
 # Details of the builderl repository
-BLDERLURL  := -b master git://github.com/yoonka/builderl.git $(BLDERLPATH)
+BLDERLURL  ?= -b master git://github.com/yoonka/builderl.git $(BLDERLPATH)/
 # An optional custom makefile to include
-CUSTOMMK   := GNUmakefileCustom
+CUSTOMMK   ?= GNUmakefileCustom
+#-------------------------------------------------------------------------------
 
 # Pull builderl repository if needed
-ISBLDERL := $(shell git -C $(BLDERLPATH) status > /dev/null 2>&1; echo $$?)
+ISBLDERL := $(shell git -C $(BLDERLPATH)/ status > /dev/null 2>&1; echo $$?)
 ifneq ($(ISBLDERL),0)
-$(info Repository $(BLDERLPATH) does not exist, will create)
+$(info Repository $(BLDERLPATH)/ does not exist, will create)
 ISBLDERL := $(shell mkdir -p $(BLDERLPATH); git clone $(BLDERLURL); echo $$?)
+ln -sf ../$(BLDERLPATH) bin/builderl
 endif
 
 ifneq ($(ISBLDERL),0)
 $(error Can not pull the repository)
 endif
 
-include $(BLDERLPATH)makefiles/main
+include $(BLDERLPATH)/makefiles/main
 ifneq ($(wildcard $(CUSTOMMK)),)
 include $(CUSTOMMK)
 endif

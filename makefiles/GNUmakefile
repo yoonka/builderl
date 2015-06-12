@@ -24,13 +24,28 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #-------------------------------------------------------------------------------
 
-# Created from https://raw.githubusercontent.com/yoonka/builderl/master/makefiles/GNUmakefile
+# Created from:
+# https://raw.githubusercontent.com/yoonka/builderl/master/makefiles/GNUmakefile
 # This is the bootstrap makefile that only downloads the actual makefile
 # Feel free to include either version in your project
 # This version makes it easier to automatically include the latest version
 # Just delete GNUmakefileBuilderl and the newest version will be downloaded
 # It's recommended that both makefiles are added to the project's repository
+#-------------------------------------------------------------------------------
+
+## These are defaults used in GNUmakefileBuilderl, change if needed
+#-------------------------------------------------------------------------------
+## Where builderl should be located in the project tree
+# BLDERLPATH ?= deps/builderl/
+## Details of the builderl repository
+# BLDERLURL  ?= -b master git://github.com/yoonka/builderl.git $(BLDERLPATH)
+## An optional custom makefile to include
+# CUSTOMMK   ?= GNUmakefileCustom
+#-------------------------------------------------------------------------------
+
+# Local name for the downloaded builderl/makefiles/GNUmakefileBuilderl
 BLDERLLOCAL := GNUmakefileBuilderl
+# URL to download the builderl/makefiles/GNUmakefileBuilderl makefile
 BLDERLMKURL := https://raw.githubusercontent.com/yoonka/builderl/master/makefiles/GNUmakefileBuilderl
 
 ifeq ($(wildcard $(BLDERLLOCAL)),)
