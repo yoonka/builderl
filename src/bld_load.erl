@@ -39,6 +39,7 @@ boot(SrcPath, DstPath, IncPath) ->
     Beams = list_files(DstPath, ".beam"),
     MaxMTime = get_max_mtime([X || {_, X} <- Srcs]),
 
+    ensure_dir(DstPath),
     IsDel = compile_modules(SrcPath, DstPath, Srcs, Beams, IncPath, false),
     compile_app(IsDel, AppSrc, AppDst, MaxMTime, load_modules(DstPath)).
 
@@ -69,6 +70,22 @@ get_mtime(Path, File) ->
 
 get_max_mtime([]) -> undefined;
 get_max_mtime(List) -> lists:max(List).
+
+ensure_dir(Name) ->
+    case filelib:is_dir(Name) of
+        true -> ok;
+        false -> mk_dir(Name)
+    end.
+
+mk_dir(Name) ->
+    io:format(standard_io, "Create folder '~s': ", [Name]),
+    case file:make_dir(Name) of
+        ok ->
+            io:format(standard_io, "Done.~n", []);
+        {error, Err} ->
+            io:format(standard_io, "Error:~n~1000p~n", [Err]),
+            halt(1)
+    end.
 
 %%------------------------------------------------------------------------------
 
@@ -145,7 +162,7 @@ do_compile_app(Src, Dst, Modules) ->
 write_app([{App, Name, List}], Dst, Modules) ->
     io:format("Writing ~s: ", [Dst]),
     NewList = lists:keyreplace(modules, 1, List, {modules, Modules}),
-    AppOut = io_lib:format("~tp.~n", [{App, Name, NewList}]),
+    AppOut = io_lib:format("~p.~n", [{App, Name, NewList}]),
     case file:write_file(Dst, AppOut) of
         ok -> io:format("OK~n");
         Err -> do_error(Err)
