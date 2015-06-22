@@ -156,15 +156,16 @@ write_app([{App, Name, List}], Dst, Modules) ->
 load_modules(Path) ->
     All = filelib:wildcard("*.beam", Path),
     Modules = [filename:basename(X, ".beam") || X <- All],
+    io:format("Loaded:"),
     lists:foreach(fun(X) -> do_load_module(Path, X) end, Modules),
+    io:format("~n"),
     [list_to_atom(X) || X <- Modules].
 
 do_load_module(Path, Module) ->
     File = filename:join(Path, Module),
-    io:format("Loading '~s': ", [File]),
     case code:load_abs(File) of
-        {module, Mod} -> io:format("Loaded: '~p'.~n", [Mod]);
-        Err -> do_error(Err)
+        {module, Mod} -> io:format(" ~s", [Mod]);
+        Err -> io:format("~n"), do_error(Err)
     end.
 
 %%------------------------------------------------------------------------------

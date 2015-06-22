@@ -22,23 +22,45 @@
 %% ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
 %% EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
--module(bld_rel).
+-module(bld_configure).
 
--export([link_builderl/2,
-         inc_get_boot_rel/1
+-export([
+         do/3
         ]).
 
-link_builderl(LinkPath, RelPath) ->
-    Ebin = filename:join(LinkPath, "ebin"),
-    To = filename:join(["..", "lib", bld_load:current_app_vsn(Ebin)]),
-    bld_lib:mk_link(To, filename:join(RelPath, LinkPath)).
+do(Cwd, {Node, DestName, Dir}, OldArgs) ->
+    io:format(standard_io, "Configure '~s' in '~s'.~n", [Node, Dir]),
 
+    ok = file:set_cwd(Dir),
+    {ok, Root} = file:get_cwd(),
+    io:format(standard_io, "Using '~s' as node root.~n", [Root]),
 
-inc_get_boot_rel(Sys) ->
-    case proplists:get_value(boot_rel, Sys) of
-        undefined ->
-            io:format("Error, can't find 'boot_rel' tuple, aborting!~n"),
-            halt(1);
-        BootRel ->
-            BootRel
-    end.
+    Args = [{<<"{{pipe_dir}}">>, "/var/run/" ++ DestName ++ "/"},
+            {<<"{{abs_node_root}}">>, Root, [global]},
+            {<<"{{node_cmd_name}}">>, DestName} | OldArgs],
+
+    ok = file:set_cwd("bin"),
+    bld_lib:process_file("env.sh.src", "env.sh", Args, [force]),
+    bld_lib:process_file("runner.src", "runner", Args, [force]),
+    bld_lib:chmod_exe("env.sh"),
+    bld_lib:chmod_exe("runner"),
+
+    ok = file:set_cwd(Root),
+    SrvSrc = filename:join(["etc", "init.d", "daemon.src"]),
+    SrvDst = filename:join(["etc", "init.d", DestName]),
+    bld_lib:process_file(SrvSrc, SrvDst, Args, [force]),
+    bld_lib:chmod(SrvDst, 8#00755),
+
+    ok = file:set_cwd(Cwd),
+    io:format(standard_io, "Finished.~n~n", []),
+    [io:format(standard_io, X ++ "~n", []) || X <- link_info(Root, DestName)].
+
+link_info(Folder, Name) ->
+    [
+     "Now please create this link:",
+     "ln -s " ++ Folder ++ "/bin/runner /usr/sbin/" ++ Name,
+     "",
+     "And copy this file '" ++ Folder ++ "/etc/init.d/"
+     ++ Name ++ "' to '/etc/init.d/'",
+     ""
+    ].

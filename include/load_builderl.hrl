@@ -34,16 +34,16 @@
 -define(BLDLOADMOD, "bld_load").
 
 load_builderl() ->
-    io:format("*** Loading builderl... ***~n"),
     {ok, Cwd} = file:get_cwd(),
     SrcPath = filename:join([Cwd, ?BUILDERLLINK, "src"]),
     DstPath = filename:join([Cwd, ?BUILDERLLINK, "ebin"]),
+    io:format("*** Loading 'builderl' from '~s' ***~n", [DstPath]),
 
     %% Just try to load and compile on-the-fly if needed
     %% Proper compilation will be done in bld_load anyway
     case code:load_abs(filename:join(DstPath, ?BLDLOADMOD)) of
         {module, Mod} ->
-            io:format("Pre-loaded: '~p'.~n", [Mod]);
+            io:format("Pre-loaded: ~p~n", [Mod]);
         _ ->
             File = filename:join(SrcPath, ?BLDLOADMOD),
             case compile:file(File, [binary, report]) of
@@ -58,4 +58,4 @@ load_builderl() ->
 
     bld_load:boot(SrcPath, DstPath, ?BUILDERLROOT),
 
-    io:format("*** Loading builderl finished. ***~n~n").
+    io:format("*** Loading 'builderl' finished. ***~n~n").
