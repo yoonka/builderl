@@ -35,11 +35,13 @@ CUSTOMMK   ?= GNUmakefileCustom
 #-------------------------------------------------------------------------------
 
 # Pull builderl repository if needed
-ISBLDERL := $(shell git -C $(BLDERLPATH)/ status > /dev/null 2>&1; echo $$?)
+ISBLDERL := $(shell git --git-dir=$(BLDERLPATH)/.git \
+  --work-tree=$(BLDERLPATH)/ status > /dev/null 2>&1; echo $$?)
 ifneq ($(ISBLDERL),0)
 $(info Repository $(BLDERLPATH)/ does not exist, will create)
-ISBLDERL := $(shell mkdir -p $(BLDERLPATH); git clone $(BLDERLURL); echo $$?)
-ln -sf ../$(BLDERLPATH) bin/builderl
+ISBLDERL := $(shell mkdir -p $(BLDERLPATH); \
+  git clone $(BLDERLURL) 1>&2; echo $$?)
+$(shell ln -sf ../$(BLDERLPATH) bin/builderl)
 endif
 
 ifneq ($(ISBLDERL),0)
