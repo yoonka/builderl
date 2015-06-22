@@ -47,6 +47,8 @@
 BLDERLLOCAL := GNUmakefileBuilderl
 # URL to download the builderl/makefiles/GNUmakefileBuilderl makefile
 BLDERLMKURL := https://raw.githubusercontent.com/yoonka/builderl/master/makefiles/GNUmakefileBuilderl
+# Skip fetching builderl for those targets
+SKIPBLDERL  := clean rm-deps
 
 ifeq ($(wildcard $(BLDERLLOCAL)),)
 $(shell erl -noshell -s inets -s ssl -eval \

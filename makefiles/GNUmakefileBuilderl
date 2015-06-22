@@ -32,7 +32,11 @@ BLDERLPATH ?= deps/builderl
 BLDERLURL  ?= -b master git://github.com/yoonka/builderl.git $(BLDERLPATH)/
 # An optional custom makefile to include
 CUSTOMMK   ?= GNUmakefileCustom
+# Skip fetching builderl for specific targets, space-separated list
+SKIPBLDERL ?= clean
 #-------------------------------------------------------------------------------
+
+ifneq ($(MAKECMDGOALS),$(filter $(MAKECMDGOALS),$(SKIPBLDERL)))
 
 # Pull builderl repository if needed
 ISBLDERL := $(shell git --git-dir=$(BLDERLPATH)/.git \
@@ -49,6 +53,8 @@ $(error Can not pull the repository)
 endif
 
 include $(BLDERLPATH)/makefiles/main
+endif # for SKIPBLDERL
+
 ifneq ($(wildcard $(CUSTOMMK)),)
 include $(CUSTOMMK)
 endif
