@@ -22,4 +22,7 @@
 %% ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
 %% EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
--define(RELTOOL_CONFIG, "etc/reltool.config").
+%% Build info to show in the footer
+-define(BUILD_INFO, "tmp/_build_info.tpl").
+
+-define(BUILDERL_CONFIG, "builderl.config").

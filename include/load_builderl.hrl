@@ -37,7 +37,7 @@ load_builderl() ->
     {ok, Cwd} = file:get_cwd(),
     SrcPath = filename:join([Cwd, ?BUILDERLLINK, "src"]),
     DstPath = filename:join([Cwd, ?BUILDERLLINK, "ebin"]),
-    io:format("*** Loading 'builderl' from '~s' ***~n", [DstPath]),
+    io:format("== Loading 'builderl' from '~s' ==~n", [DstPath]),
 
     %% Just try to load and compile on-the-fly if needed
     %% Proper compilation will be done in bld_load anyway
@@ -58,4 +58,4 @@ load_builderl() ->
 
     bld_load:boot(SrcPath, DstPath, ?BUILDERLROOT),
 
-    io:format("*** Loading 'builderl' finished. ***~n~n").
+    io:format("== Loading 'builderl' finished. ==~n").

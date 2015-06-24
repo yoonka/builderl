@@ -27,9 +27,9 @@
 -include_lib("builderl/include/builderl.hrl").
 
 -export([
-         get_reltool_config/0,
          check_file_op/1,
          consult_app_file/1,
+         trim/1,
          print/1,
          h_line/1,
          chmod_exe/1,
@@ -37,27 +37,27 @@
          mk_link/2,
          mk_dir/1,
          intersection/2,
+         read_builderl_config/1,
+         get_node_name/2,
          process_file/3,
          process_file/4,
          read_data/1,
+         cp_file/3,
          cp_file/4,
-         cp_dir/4
+         cp_dir/4,
+         write_terms/2,
+         start_node/2,
+         running_nodes/0,
+         connect_to_node/1
         ]).
+
+%% Name of the node running this escript
+-define(NAME, builderl).
 
 %% Attributes to set on an executable script
 -define(EXEMODE, 8#00744).
 
 %%------------------------------------------------------------------------------
-
-get_reltool_config() ->
-    case file:consult(?RELTOOL_CONFIG) of
-        {ok, File} ->
-            File;
-        {error, Error} ->
-            Msg = "Can't read file '~s':~nError: ~p~n",
-            io:format(standard_error, Msg, [?RELTOOL_CONFIG, Error]),
-            halt(1)
-    end.
 
 check_file_op(ok) ->
     io:format(standard_io, "Done.~n", []);
@@ -79,6 +79,10 @@ error_reading_file(Src, Err) ->
 
 %%------------------------------------------------------------------------------
 
+%% Strip all leading and/or trailing white characters
+trim(What) ->
+    re:replace(What, "(^\\s+)|(\\s+$)", "", [global, {return, list}]).
+
 print(Lines) -> [io:format(standard_error, X ++ "~n", []) || X <- Lines].
 
 h_line(Msg) ->
@@ -92,11 +96,11 @@ h_line(Msg, Org, Line) ->
 
 chmod_exe(File) ->
     io:format(standard_io, "Change mode of '~s' to ~.8B: ", [File, ?EXEMODE]),
-    bld_lib:check_file_op(file:change_mode(File, ?EXEMODE)).
+    check_file_op(file:change_mode(File, ?EXEMODE)).
 
 chmod(File, Mode) ->
     io:format(standard_io, "Change mode of '~s' to ~.8B: ", [File, Mode]),
-    bld_lib:check_file_op(file:change_mode(File, Mode)).
+    check_file_op(file:change_mode(File, Mode)).
 
 mk_link(To, From) ->
     io:format(standard_io, "Create link to '~s' from '~s': ", [To, From]),
@@ -110,6 +114,33 @@ mk_dir(Name) ->
 
 intersection(L1, L2) ->
     lists:filter(fun(X) -> lists:member(X, L1) end, L2).
+
+%%------------------------------------------------------------------------------
+
+read_builderl_config(RelDir) ->
+    CfgFile = filename:join(RelDir, ?BUILDERL_CONFIG),
+    io:format("~nReading '~s': ", [CfgFile]),
+    case file:consult(CfgFile) of
+        {ok, Cfg} ->
+            io:format("OK~n"),
+            Cfg;
+        {error, Err} ->
+            io:format("Error '~p', aborting.~n", [Err]),
+            halt(1)
+    end.
+
+
+get_node_name(Type, BldCfg) ->
+    element(4, get_node_type(Type, BldCfg)).
+
+
+get_node_type(Type, [{node_type, Type, _, _, _, _} = Node|_]) -> Node;
+get_node_type(Type, [_|T]) -> get_node_type(Type, T);
+get_node_type(Type, []) -> halt_bad_node_type(Type).
+
+halt_bad_node_type(Type) ->
+    io:format("Unknown node type '~p', aborting.", [Type]),
+    halt(1).
 
 %%------------------------------------------------------------------------------
 
@@ -161,10 +192,15 @@ replace({Name, Value, Opts}, Src) -> re:replace(Src, Name, Value, Opts).
 
 %%------------------------------------------------------------------------------
 
+cp_file(Src, Dst, File) ->
+    cp_file(Src, Dst, File, []).
+
+
 cp_file(Src, Dest, File, Args) ->
     SrcFile = filename:join(Src, File),
     DestFile = filename:join(Dest, File),
     process_file(SrcFile, DestFile, Args).
+
 
 cp_dir(Src, Dest, Templates, CfgArgs) ->
     Msg = "Processing files from '~s'~n  to '~s'...~n",
@@ -193,3 +229,63 @@ subtract_root(SrcElems, Paths) ->
     [filename:join(filename:split(X) -- SrcElems) || X <- Paths].
 
 %%------------------------------------------------------------------------------
+
+write_terms(File, Terms) ->
+    FormatFun = fun(Term) -> io_lib:format("~p.~n", [Term]) end,
+    Texts = lists:map(FormatFun, Terms),
+    ok = file:write_file(File, Texts).
+
+%%------------------------------------------------------------------------------
+
+start_node({Name, Base}, CmdFun) ->
+    Cmd = filename:join([Base, "bin", CmdFun(Name)]),
+    io:format(standard_io, "Executing '~s'.~n", [Cmd]),
+    Res = os:cmd(Cmd),
+    io:format("Result: ~p~n~n", [Res]).
+
+
+running_nodes() ->
+    case net_adm:names() of
+        {error, address} -> [];
+        {ok, All} -> [Name || {Name, _} <- All]
+    end.
+
+
+connect_to_node(Dir) ->
+    Cookie = trim(read_data(filename:join(Dir, ".erlang.cookie"))),
+    {NameType, Hostname} = extract_host_name(Dir),
+    Arg = [?NAME, NameType],
+    Res = net_kernel:start(Arg),
+    io:format("Started Net Kernel with Arg: ~p, Result: ~p~n", [Arg, Res]),
+    io:format("Running as node:~p~n~n", [node()]),
+    erlang:set_cookie(node(), list_to_atom(Cookie)),
+    Remote = list_to_atom(Hostname),
+    case net_adm:ping(Remote) of
+        pang -> {false, Remote};
+        pong -> {true, Remote}
+    end.
+
+extract_host_name(Dir) ->
+    VmArgs = read_data(filename:join([Dir, "etc", "vm.args"])),
+    Lines = binary:split(VmArgs, <<"\n">>, [global]),
+    SName = <<"-sname">>,
+    Name = <<"-name">>,
+    case first_match([SName, Name], Lines) of
+        {SName, Host} -> {shortnames, Host};
+        {Name, Host} -> {longnames, Host}
+    end.
+
+first_match(ToFind, [H|T]) ->
+    case binary:match(H, ToFind) of
+        nomatch -> first_match(ToFind, T);
+        {_, _} = Part -> extract_host(Part, H)
+    end;
+first_match(_, []) ->
+    Msg = "Error, neither '-sname' nor '-name' found in 'vm.args', aborting!~n",
+    io:format(Msg),
+    halt(1).
+
+extract_host({Start, Length} = Part, Line) ->
+    NewStart = Start + Length + 1,
+    Host = binary:part(Line, {NewStart, byte_size(Line) - NewStart}),
+    {binary:part(Line, Part), trim(binary_to_list(Host))}.
