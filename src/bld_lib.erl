@@ -27,8 +27,15 @@
 -include_lib("builderl/include/builderl.hrl").
 
 -export([
-         check_file_op/1,
+         halt_badarg/1,
+         halt_badtype/1,
+         add_node/4,
+         extract_node/2,
+         node_dir/3,
+         node_name/3,
+         start_erl_data/0,
          consult_app_file/1,
+         intersection/2,
          trim/1,
          print/1,
          h_line/1,
@@ -36,19 +43,23 @@
          chmod/2,
          mk_link/2,
          mk_dir/1,
-         intersection/2,
+         read_builderl_config/0,
          read_builderl_config/1,
          get_node_name/2,
+         get_default_nodes/1,
+         get_params/1,
+         get_rel_dir/0,
+         start_node/2,
+         running_nodes/0,
+         connect_to_node/1,
          process_file/3,
          process_file/4,
          read_data/1,
          cp_file/3,
          cp_file/4,
          cp_dir/4,
-         write_terms/2,
-         start_node/2,
-         running_nodes/0,
-         connect_to_node/1
+         check_file_op/1,
+         write_terms/2
         ]).
 
 %% Name of the node running this escript
@@ -57,13 +68,85 @@
 %% Attributes to set on an executable script
 -define(EXEMODE, 8#00744).
 
+%% Regular expression that a node suffix must match
+-define(SUFFIX_RE, "^[\\w-.#+]*$").
+
 %%------------------------------------------------------------------------------
 
-check_file_op(ok) ->
-    io:format(standard_io, "Done.~n", []);
-check_file_op({error, Err}) ->
-    io:format(standard_io, "Error:~n~1000p~n", [Err]),
-    halt(1).
+err_badarg(Option) ->
+    [
+     "Error, unrecognized option:'" ++ Option ++ "', aborting.",
+     "Use -h or --help for the list of options."
+    ].
+
+err_badtype(Node) ->
+    [
+     "Error, unrecognized node type:'" ++ Node ++ "', aborting.",
+     "Use -h or --help for help."
+    ].
+
+err_duplicate(Node) ->
+    [
+     "Error, node '" ++ Node ++ "' specified multiple times, aborting.",
+     "Use -h or --help for help."
+    ].
+
+err_suffix(Suffix) ->
+    [
+     "Error, incorrect suffix: '" ++ Suffix ++ "'. It must match the following",
+     "regular expression: '" ++ ?SUFFIX_RE ++ "'."
+    ].
+
+halt_badarg(Other)   -> bld_lib:print(err_badarg(Other)),   halt(1).
+halt_badtype(Text)   -> bld_lib:print(err_badtype(Text)),   halt(1).
+halt_duplicate(Node) -> bld_lib:print(err_duplicate(Node)), halt(1).
+halt_suffix(Suffix)  -> bld_lib:print(err_suffix(Suffix)),  halt(1).
+
+%%------------------------------------------------------------------------------
+
+add_node(Text, Custom, {_, _, BldCfg} = Params, Options) ->
+    {Type, Suffix} = extract_node(Text, Params),
+    not is_node(Type, Suffix, Options) orelse halt_duplicate(Text),
+    [{node, Custom, Type, Suffix, node_dir(Type, Suffix, BldCfg)} | Options].
+
+is_node(Type, Suffix, Options) ->
+    lists:any(fun(X) -> is_node1(X, Type, Suffix) end, Options).
+
+is_node1({node, _, T, S, _}, Type, Suffix)
+  when T =:= Type, S =:= Suffix -> true;
+is_node1(_X, _Type, _Suffix) -> false.
+
+
+extract_node(Text, {Allowed, SuffixRe, _}) ->
+    case string:chr(Text, $-) of
+        0 ->
+            Node = Text,
+            Suffix = [];
+        Idx ->
+            Node = string:sub_string(Text, 1, Idx - 1),
+            Suffix = string:sub_string(Text, Idx + 1)
+    end,
+    lists:member(Node, Allowed) orelse halt_badtype(Text),
+    Len = length(Suffix),
+    re:run(Suffix, SuffixRe) =:= {match, [{0, Len}]} orelse halt_suffix(Suffix),
+    {list_to_existing_atom(Node), Suffix}.
+
+
+node_dir(Type, Suffix, BldCfg) ->
+    "../" ++ node_name(Type, Suffix, BldCfg).
+
+
+node_name(Type, Suffix, BldCfg) when is_atom(Type) ->
+    node_name(get_node_name(Type, BldCfg), Suffix, BldCfg);
+node_name(Name, Suffix, _BldCfg) ->
+    if Suffix == [] -> Name;
+       true -> Name ++ "-" ++ Suffix end.
+
+
+start_erl_data() ->
+    {ok, Data} = file:read_file("releases/start_erl.data"),
+    [ErtsVsn, VsnBin] = binary:split(Data, <<" ">>),
+    {trim(ErtsVsn), trim(VsnBin)}.
 
 %%------------------------------------------------------------------------------
 
@@ -78,6 +161,9 @@ error_reading_file(Src, Err) ->
     halt(1).
 
 %%------------------------------------------------------------------------------
+
+intersection(L1, L2) ->
+    lists:filter(fun(X) -> lists:member(X, L1) end, L2).
 
 %% Strip all leading and/or trailing white characters
 trim(What) ->
@@ -112,10 +198,13 @@ mk_dir(Name) ->
 
 %%------------------------------------------------------------------------------
 
-intersection(L1, L2) ->
-    lists:filter(fun(X) -> lists:member(X, L1) end, L2).
+read_builderl_config() ->
+    read_builderl_config(get_rel_dir()).
 
-%%------------------------------------------------------------------------------
+get_rel_dir() ->
+    {_, Vsn} = start_erl_data(),
+    filename:join("releases", Vsn).
+
 
 read_builderl_config(RelDir) ->
     CfgFile = filename:join(RelDir, ?BUILDERL_CONFIG),
@@ -141,6 +230,71 @@ get_node_type(Type, []) -> halt_bad_node_type(Type).
 halt_bad_node_type(Type) ->
     io:format("Unknown node type '~p', aborting.", [Type]),
     halt(1).
+
+
+get_default_nodes(BldCfg) ->
+    element(2, lists:keyfind(default_nodes, 1, BldCfg)).
+
+
+get_params(BldCfg) ->
+    Allowed = [atom_to_list(T) || {node_type, T, _, _, _, _} <- BldCfg],
+    {ok, SuffixRe} = re:compile(?SUFFIX_RE),
+    {Allowed, SuffixRe, BldCfg}.
+
+%%------------------------------------------------------------------------------
+
+start_node({Name, Base}, CmdFun) ->
+    Cmd = filename:join([Base, "bin", CmdFun(Name)]),
+    io:format(standard_io, "Executing '~s'.~n", [Cmd]),
+    Res = os:cmd(Cmd),
+    io:format("Result: ~p~n~n", [Res]).
+
+
+running_nodes() ->
+    case net_adm:names() of
+        {error, address} -> [];
+        {ok, All} -> [Name || {Name, _} <- All]
+    end.
+
+
+connect_to_node(Dir) ->
+    Cookie = trim(read_data(filename:join(Dir, ".erlang.cookie"))),
+    {NameType, Hostname} = extract_host_name(Dir),
+    Arg = [?NAME, NameType],
+    Res = net_kernel:start(Arg),
+    io:format("Started Net Kernel with Arg: ~p, Result: ~p~n", [Arg, Res]),
+    io:format("Running as node:~p~n~n", [node()]),
+    erlang:set_cookie(node(), list_to_atom(Cookie)),
+    Remote = list_to_atom(Hostname),
+    case net_adm:ping(Remote) of
+        pang -> {false, Remote};
+        pong -> {true, Remote}
+    end.
+
+extract_host_name(Dir) ->
+    VmArgs = read_data(filename:join([Dir, "etc", "vm.args"])),
+    Lines = binary:split(VmArgs, <<"\n">>, [global]),
+    SName = <<"-sname">>,
+    Name = <<"-name">>,
+    case first_match([SName, Name], Lines) of
+        {SName, Host} -> {shortnames, Host};
+        {Name, Host} -> {longnames, Host}
+    end.
+
+first_match(ToFind, [H|T]) ->
+    case binary:match(H, ToFind) of
+        nomatch -> first_match(ToFind, T);
+        {_, _} = Part -> extract_host(Part, H)
+    end;
+first_match(_, []) ->
+    Msg = "Error, neither '-sname' nor '-name' found in 'vm.args', aborting!~n",
+    io:format(Msg),
+    halt(1).
+
+extract_host({Start, Length} = Part, Line) ->
+    NewStart = Start + Length + 1,
+    Host = binary:part(Line, {NewStart, byte_size(Line) - NewStart}),
+    {binary:part(Line, Part), trim(binary_to_list(Host))}.
 
 %%------------------------------------------------------------------------------
 
@@ -230,62 +384,14 @@ subtract_root(SrcElems, Paths) ->
 
 %%------------------------------------------------------------------------------
 
+check_file_op(ok) ->
+    io:format(standard_io, "Done.~n", []);
+check_file_op({error, Err}) ->
+    io:format(standard_io, "Error:~n~1000p~n", [Err]),
+    halt(1).
+
+
 write_terms(File, Terms) ->
     FormatFun = fun(Term) -> io_lib:format("~p.~n", [Term]) end,
     Texts = lists:map(FormatFun, Terms),
     ok = file:write_file(File, Texts).
-
-%%------------------------------------------------------------------------------
-
-start_node({Name, Base}, CmdFun) ->
-    Cmd = filename:join([Base, "bin", CmdFun(Name)]),
-    io:format(standard_io, "Executing '~s'.~n", [Cmd]),
-    Res = os:cmd(Cmd),
-    io:format("Result: ~p~n~n", [Res]).
-
-
-running_nodes() ->
-    case net_adm:names() of
-        {error, address} -> [];
-        {ok, All} -> [Name || {Name, _} <- All]
-    end.
-
-
-connect_to_node(Dir) ->
-    Cookie = trim(read_data(filename:join(Dir, ".erlang.cookie"))),
-    {NameType, Hostname} = extract_host_name(Dir),
-    Arg = [?NAME, NameType],
-    Res = net_kernel:start(Arg),
-    io:format("Started Net Kernel with Arg: ~p, Result: ~p~n", [Arg, Res]),
-    io:format("Running as node:~p~n~n", [node()]),
-    erlang:set_cookie(node(), list_to_atom(Cookie)),
-    Remote = list_to_atom(Hostname),
-    case net_adm:ping(Remote) of
-        pang -> {false, Remote};
-        pong -> {true, Remote}
-    end.
-
-extract_host_name(Dir) ->
-    VmArgs = read_data(filename:join([Dir, "etc", "vm.args"])),
-    Lines = binary:split(VmArgs, <<"\n">>, [global]),
-    SName = <<"-sname">>,
-    Name = <<"-name">>,
-    case first_match([SName, Name], Lines) of
-        {SName, Host} -> {shortnames, Host};
-        {Name, Host} -> {longnames, Host}
-    end.
-
-first_match(ToFind, [H|T]) ->
-    case binary:match(H, ToFind) of
-        nomatch -> first_match(ToFind, T);
-        {_, _} = Part -> extract_host(Part, H)
-    end;
-first_match(_, []) ->
-    Msg = "Error, neither '-sname' nor '-name' found in 'vm.args', aborting!~n",
-    io:format(Msg),
-    halt(1).
-
-extract_host({Start, Length} = Part, Line) ->
-    NewStart = Start + Length + 1,
-    Host = binary:part(Line, {NewStart, byte_size(Line) - NewStart}),
-    {binary:part(Line, Part), trim(binary_to_list(Host))}.

@@ -133,22 +133,17 @@ merge_config(_OldElem, NewElem) ->
 %%------------------------------------------------------------------------------
 
 runtime_variables() ->
-    {_, Vsn} = StartErl = get_rel_vsn(),
+    {_, Vsn} = StartErl = bld_lib:start_erl_data(),
     RelDir = filename:join("releases", Vsn),
     Hostname = hostname(),
-    NodeTypes = bld_lib:read_builderl_config(RelDir),
+    BldConf = bld_lib:read_builderl_config(RelDir),
     Vars = [
             {start_erl, StartErl},
             {rel_dir, RelDir},
             {hostname, Hostname}
-           ] ++ NodeTypes,
+           ] ++ BldConf,
     io:format("~nUsing runtime variables:~n~p~n", [Vars]),
     Vars.
-
-get_rel_vsn() ->
-    {ok, Data} = file:read_file("releases/start_erl.data"),
-    [ErtsVsn, VsnBin] = binary:split(Data, <<" ">>),
-    {bld_lib:trim(ErtsVsn), bld_lib:trim(VsnBin)}.
 
 hostname() ->
     {ok, Hostname} = inet:gethostname(),

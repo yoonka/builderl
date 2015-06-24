@@ -245,7 +245,13 @@ write_builderl_config(RelVsn, Cfg) ->
     io:format(" => Create file: ~s~n", [File]),
     Terms = proplists:get_value(release_types, Cfg, []),
     Recs = [{node_type, A, B, C, D, E} || {A, B, C, D, E} <- Terms],
-    bld_lib:write_terms(File, Recs).
+    bld_lib:write_terms(File, [default_nodes(Cfg) | Recs]).
+
+default_nodes(Cfg) ->
+    case lists:keyfind(default_nodes, 1, Cfg) of
+        false -> {default_nodes, []};
+        Nodes -> Nodes
+    end.
 
 
 link_builderl(LinkPath, RelPath) ->
