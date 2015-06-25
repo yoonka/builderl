@@ -26,15 +26,11 @@
 
 ## Defaults, change if needed
 #-------------------------------------------------------------------------------
-# Where builderl should be located in the project tree
-BLDERLPATH ?= deps/builderl
 # Details of the builderl repository
 BLDERLURL  ?= -b master git://github.com/yoonka/builderl.git $(BLDERLPATH)/
 # An optional custom makefile to include
 CUSTOMMK   ?= GNUmakefileCustom
 #-------------------------------------------------------------------------------
-
-ifneq ($(MAKECMDGOALS),$(filter $(MAKECMDGOALS),rm-builderl))
 
 # Pull builderl repository if needed
 ISBLDERL := $(shell git --git-dir=$(BLDERLPATH)/.git \
@@ -52,14 +48,6 @@ endif
 
 incs := common rel_app_vars deps targets configs clean debug
 include $(foreach file,$(incs),$(BLDERLPATH)/makefiles/$(file))
-
-else
-
-.PHONY: rm-builderl
-rm-builderl:
-	rm -rf $(BLDERLPATH)
-
-endif
 
 ifneq ($(wildcard $(CUSTOMMK)),)
 include $(CUSTOMMK)
