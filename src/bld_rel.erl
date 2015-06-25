@@ -26,10 +26,7 @@
 
 -include_lib("builderl/include/builderl.hrl").
 
--export([
-         mk_dev/0,
-         mk_rel/1
-        ]).
+-export([mk_dev/0, mk_rel/1]).
 
 -define(RELTOOL_CONFIG, "etc/reltool.config").
 

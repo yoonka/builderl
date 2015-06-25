@@ -23,9 +23,7 @@
 %% ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
 %% EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
--export([
-         load_builderl/0
-        ]).
+-export([load_builderl/0]).
 
 %% This module requires the link to the current version of builderl.
 %% The link is always in the bin folder of the project's root folder.

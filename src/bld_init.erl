@@ -142,7 +142,7 @@ runtime_variables() ->
             {rel_dir, RelDir},
             {hostname, Hostname}
            ] ++ BldConf,
-    io:format("~nUsing runtime variables:~n~p~n", [Vars]),
+    io:format("Using runtime variables:~n~p~n", [Vars]),
     Vars.
 
 hostname() ->

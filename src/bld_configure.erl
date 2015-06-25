@@ -24,11 +24,79 @@
 
 -module(bld_configure).
 
--export([
-         do/3
-        ]).
+-export([do/1]).
 
-do(Cwd, {Node, DestName, Dir}, OldArgs) ->
+usage(Allowed) ->
+    [
+     "************************************************************************",
+     "Reconfigures scripts from the node_package repository that are used",
+     "to start and manage nodes installed with \"./bin/init.esh\".",
+     "See: https://github.com/basho/node_package",
+     "",
+     "Usage:",
+     "  configure.esh [ -v | -h | --help | [ <type> | <type>-<suffix> ]",
+     "  configure.esh [ -n (<type> | <type>-<suffix>) <name> ]",
+     "",
+     "  -h, --help",
+     "    This help.",
+     "",
+     "  <type>, <type>-<suffix>",
+     "    If only the type is specified then it configures all nodes of the",
+     "    given type. If the suffix is specified as well then it configures",
+     "    only the specified node type with the supplied suffix. If no type",
+     "    is specified then it configures all known node types.",
+     "    Known node types are: " ++ string:join(Allowed, ", ") ++ ".",
+     "",
+     "  -n (<type> | <type>-<suffix>) <name>",
+     "    Similar to just specifying <type> or <type>-<suffix> but",
+     "    instead of using the <type> or <type>-<suffix> it uses the supplied",
+     "    <name> as the name of the service and the command to start and",
+     "    control the node.",
+     "************************************************************************"
+    ].
+
+do(Args) ->
+    BldConf = bld_lib:read_builderl_config(),
+    do1(Args, BldConf).
+
+do1(["-h"], BldCfg) ->     configure_usage(BldCfg);
+do1(["--help"], BldCfg) -> configure_usage(BldCfg);
+do1(Other, BldCfg) ->      do2(Other, bld_lib:get_params(BldCfg), []).
+
+configure_usage(BldCfg) ->
+    bld_lib:print(usage(bld_lib:get_allowed(BldCfg))).
+
+do2(["-n", Node, Name | T], P, Acc) ->
+    do2(T, P, bld_lib:add_node(Node, Name, P, Acc));
+do2([Node | T], P, Acc) ->
+    do2(T, P, bld_lib:add_node(Node, Node, P, Acc));
+do2([], P, Acc) ->
+    do3(P, ensure_nodes(P, lists:reverse(Acc)));
+do2(Other, _P, _Acc) ->
+    bld_lib:halt_badarg(Other).
+
+ensure_nodes({_, _, BldCfg} = Params, Options) ->
+    case lists:keymember(node, 1, Options) of
+        true ->
+            Options;
+        false ->
+            Fun = fun(N, Acc) -> bld_lib:add_node(N, N, Params, Acc) end,
+            lists:foldl(Fun, Options, bld_lib:get_default_nodes(BldCfg))
+    end.
+
+do3({_, _, BldCfg}, OldOpts) ->
+    Options = [{bld_lib:node_name(T, S, BldCfg), N, D}
+               || {node, N, T, S, D} <- OldOpts],
+    io:format("Using options: ~p~n", [Options]),
+
+    {ok, Cwd} = file:get_cwd(),
+    io:format(standard_io, "Using '~s' as code root.~n", [Cwd]),
+    Args = [{<<"{{abs_code_root}}">>, Cwd, [global]}],
+
+    io:format(standard_io, "~n => Configuring nodes...~n~n", []),
+    lists:foreach(fun(Node) -> configure(Cwd, Node, Args) end, Options).
+
+configure(Cwd, {Node, DestName, Dir}, OldArgs) ->
     io:format(standard_io, "Configure '~s' in '~s'.~n", [Node, Dir]),
 
     ok = file:set_cwd(Dir),

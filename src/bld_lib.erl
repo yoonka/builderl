@@ -47,6 +47,7 @@
          read_builderl_config/1,
          get_node_name/2,
          get_default_nodes/1,
+         get_allowed/1,
          get_params/1,
          get_rel_dir/0,
          start_node/2,
@@ -208,10 +209,10 @@ get_rel_dir() ->
 
 read_builderl_config(RelDir) ->
     CfgFile = filename:join(RelDir, ?BUILDERL_CONFIG),
-    io:format("~nReading '~s': ", [CfgFile]),
+    io:format("Reading '~s': ", [CfgFile]),
     case file:consult(CfgFile) of
         {ok, Cfg} ->
-            io:format("OK~n"),
+            io:format("OK~n~n"),
             Cfg;
         {error, Err} ->
             io:format("Error '~p', aborting.~n", [Err]),
@@ -234,6 +235,10 @@ halt_bad_node_type(Type) ->
 
 get_default_nodes(BldCfg) ->
     element(2, lists:keyfind(default_nodes, 1, BldCfg)).
+
+
+get_allowed(BldCfg) ->
+    [atom_to_list(T) || {node_type, T, _, N, _, _} <- BldCfg, N =/= undefined].
 
 
 get_params(BldCfg) ->
