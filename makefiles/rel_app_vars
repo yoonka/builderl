@@ -31,7 +31,7 @@
 # exports app_name vars: _src_file _file _app _app_vsn _module_erl _module_beam
 # exports rel_name vars: _rel_apps
 # exports XFORM_BEAMS
-# changes Compilation_Flags
+# changes ERLCFLAGS
 
 # NOTE: Compile a list of applications and their versions. There are two
 #       lists, App_Names lists all the application names from the 'lib' folder,
@@ -142,5 +142,5 @@ xform_app_names = \
   $(sort $(foreach x, $(xform_search:lib/%=%), $(firstword $(subst /,$(space),$(x)))))
 xform_flags := $(foreach app_name,$(xform_app_names),$(App_Ebin_Dir:%/=-pa %))
 
-Compilation_Flags += $(xform_flags)
-$(info Compilation_Flags = $(Compilation_Flags) )
+ERLCFLAGS += $(xform_flags)
+$(info ERLCFLAGS = $(ERLCFLAGS) )

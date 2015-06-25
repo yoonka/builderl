@@ -55,25 +55,19 @@ $(shell curl -O $(BLDERLMKURL))
 endif
 
 ## These are defaults used in GNUmakefileBuilderl, change if needed
-#-------------------------------------------------------------------------------
+##------------------------------------------------------------------------------
 ## Where builderl should be located in the project tree
 # BLDERLPATH ?= deps/builderl/
 ## Details of the builderl repository
 # BLDERLURL  ?= -b master git://github.com/yoonka/builderl.git $(BLDERLPATH)
 ## An optional custom makefile to include
 # CUSTOMMK   ?= GNUmakefileCustom
-#-------------------------------------------------------------------------------
+##------------------------------------------------------------------------------
 
-## Defaults used in other builderl makefiles, change if needed
-#-------------------------------------------------------------------------------
-## Skip fetching builderl for those targets
-# SKIPBLDERL ?= clean rm-deps
+## Additional project-specific variables and settings
+##------------------------------------------------------------------------------
 ## Tested version known to compile riak_pb properly
 # REBARURL   ?= https://github.com/yoonka/erlstrap/wiki/rebar
-#-------------------------------------------------------------------------------
-
-# Additional project-specific variables and settings
-#-------------------------------------------------------------------------------
 ## Location of the Git repository
 # GITURL     ?= https://github.com/ExampleNotExistentAccount
 ## Name of the development branch, uses dependencies specified for this branch

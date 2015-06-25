@@ -51,5 +51,4 @@ clean-tgz:
 	rm -f $(REL_PATH)/../*.tgz
 
 clean: dep-clean clean-tgz clean-rel clean-dev clean-deps
-	rm -rf $(DEPS_DIR)/builderl
 	rm -rf $(clean_app_dirs) $(clean_editor_backup)
