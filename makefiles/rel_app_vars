@@ -1,0 +1,146 @@
+# -*- mode: Makefile -*-
+# Copyright (c) 2015, Peter Mander and Grzegorz Junka
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+# * Redistributions of source code must retain the above copyright notice, this
+#   list of conditions and the following disclaimer.
+#
+# * Redistributions in binary form must reproduce the above copyright notice,
+#   this list of conditions and the following disclaimer in the documentation
+#   and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+# uses: app_name vsn_regexp
+# exports: App_Names App_Src_Dir App_Ebin_Dir App_Modules App_Beam_Files
+# exports: App_Mibs_Dir App_Mibs
+# exports: Rel_Names Rel_Vsn rel_name
+# exports app_name vars: _modules _has_vsn _mibs _mib_bin_files _app_dependencies
+# exports app_name vars: _src_file _file _app _app_vsn _module_erl _module_beam
+# exports rel_name vars: _rel_apps
+# exports XFORM_BEAMS
+# changes Compilation_Flags
+
+# NOTE: Compile a list of applications and their versions. There are two
+#       lists, App_Names lists all the application names from the 'lib' folder,
+#       and applications lists the application names with a dash-version suffix.
+#
+#       Another set of variables, one for each application, are identified
+#       by the application name with the suffix _has_vsn. These variable
+#       store the application version, and enable mapping the application
+#       name to the corresponding version.
+
+a_app_src_files = $(shell find lib/ -maxdepth 3 -name *.app.src)
+App_Names := $(notdir $(a_app_src_files:%.app.src=%))
+
+App_Src_Dir = $(app_name:%=lib/%/src/)
+
+a_app_vsn_mk = $(wildcard lib/$(app_name)/src/vsn.mk)
+a_app_version = $(if $(a_app_vsn_mk),\
+  $(shell sed -n $(vsn_regexp) < $(a_app_vsn_mk) ),\
+  $(error The application $(app_name) is missing a vsn.mk file) )
+
+a_app_erl_files = $(wildcard $(App_Src_Dir:%=%*.erl))
+a_app_modules = $(notdir $(a_app_erl_files:%.erl=%))
+
+# List all appup files that needs to be copied from src to ebin for each app
+a_appup_srcs = $(shell find lib/*/src/*.appup.src)
+AppUp_Names = $(subst /src/,/ebin/,$(a_appup_srcs))
+a_appup_dests = $(AppUp_Names:%.appup.src=%.appup)
+
+# NOTE: Map the application name to:
+#        * the modules
+#        * the version
+#
+$(foreach app_name, $(App_Names),\
+  $(eval $(app_name)_modules := $(a_app_modules)) \
+  $(eval $(app_name)_has_vsn := $(a_app_version)) )
+
+a_app_vsn = $($(app_name)_has_vsn)
+App_Ebin_Dir = $(app_name:%=lib/%/ebin/)
+App_Modules = $($(app_name)_modules)
+App_Beam_Files = $(App_Modules:%=$(App_Ebin_Dir)%.beam)
+
+App_Mibs_Dir = lib/$(app_name)/priv/mibs/
+
+a_mib_src_files = $(wildcard $(App_Src_Dir:%=%*.mib))
+a_mib_bin_files = $(a_mib_src_files:$(App_Src_Dir)%.mib=$(App_Mibs_Dir)%.bin)
+a_mibs = $(notdir $(a_mib_src_files:%.mib=%))
+
+# NOTE: Map the application name to:
+#       * the bin files in the priv/mibs directory
+#
+$(foreach app_name, $(App_Names),\
+  $(eval $(app_name)_mibs := $(a_mibs)) \
+  $(eval $(app_name)_mib_bin_files := $(a_mib_bin_files)) )
+
+App_Mibs = $($(app_name)_mibs)
+
+a_app_mib_bin_files = $($(app_name)_mib_bin_files)
+a_app_file = $(app_name:%=$(App_Ebin_Dir)%.app)
+a_app_src_file = $(app_name:%=$(App_Src_Dir)%.app.src)
+
+a_dependencies = $(sort \
+  $(App_Beam_Files) \
+  $(a_app_file) \
+  $(a_app_mib_bin_files) )
+
+$(foreach app_name, $(App_Names),\
+  $(eval $(app_name)_app_dependencies := $(a_dependencies)) \
+  $(eval $(app_name)_src_file := $(a_app_src_file)) \
+  $(eval $(app_name)_file := $(a_app_file)) )
+
+a_mod_erl = $(App_Src_Dir:%=%$(mod_name:%=%.erl))
+a_mod_beam = $(App_Ebin_Dir:%=%$(mod_name:%=%.beam))
+
+#
+# NOTE: Map the module name to:
+#        * the application and version it is member of
+#        * the path and file name of the erl source file
+#        * the path and file name of the beam target file.
+#
+$(foreach app_name, $(App_Names),\
+  $(foreach mod_name, $(App_Modules),\
+    $(eval $(mod_name)_app := $(app_name)) \
+    $(eval $(mod_name)_app_vsn := $(a_app_vsn)) \
+    $(eval $(app_name)$(dep_separator)$(mod_name)_module_erl := $(a_mod_erl)) \
+    $(eval $(app_name)$(dep_separator)$(mod_name)_module_beam := $(a_mod_beam)) ) )
+
+Rel_Vsn = $(lastword $(shell cat releases/start_erl.data 2>/dev/null || echo unknown))
+
+r_rel_files = $(notdir $(wildcard releases/$(Rel_Vsn)/*.rel))
+Rel_Names = $(r_rel_files:%.rel=%)
+
+r_rel_apps = $(shell sed -n $(release_regexp) < releases/$(Rel_Vsn)/$(rel_name).rel | tr -d \' )
+
+$(foreach rel_name, $(Rel_Names),$(eval $(rel_name)_rel_apps := $(r_rel_apps)) )
+
+# NOTE: Search for modules that implement parse_transform functions, and
+#       make the applications in which they are defined a primary
+#       dependency, to force the build to finish these applications first,
+#       and add them to the -pa paths of dependent applications.
+
+xform_search = $(shell grep -l '^parse_transform' lib/*/src/*.erl )
+xform_erls = $(notdir $(xform_search))
+xform_mods = $(xform_erls:%.erl=%)
+
+XFORM_BEAMS = $(foreach module,$(xform_mods),$($(module:%=%_module_beam)) )
+
+xform_app_names = \
+  $(sort $(foreach x, $(xform_search:lib/%=%), $(firstword $(subst /,$(space),$(x)))))
+xform_flags := $(foreach app_name,$(xform_app_names),$(App_Ebin_Dir:%/=-pa %))
+
+Compilation_Flags += $(xform_flags)
+$(info Compilation_Flags = $(Compilation_Flags) )

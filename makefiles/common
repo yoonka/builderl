@@ -1,0 +1,112 @@
+# -*- mode: Makefile -*-
+# Copyright (c) 2015, Peter Mander and Grzegorz Junka
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+# * Redistributions of source code must retain the above copyright notice, this
+#   list of conditions and the following disclaimer.
+#
+# * Redistributions in binary form must reproduce the above copyright notice,
+#   this list of conditions and the following disclaimer in the documentation
+#   and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+$(if $(filter 0 1,$(words $(filter tgz rel dev,$(MAKECMDGOALS)))),,\
+  $(error Please run make with only one of these targets: dev, rel or tgz))
+
+MAKE_GOAL ?= dev
+.DEFAULT_GOAL := $(MAKE_GOAL)
+
+DEPS_DIR       := deps
+NODETOOL_DIR   := deps/node_package/priv/base
+DEV_BUILD_DONE := tmp/dev_build.touch
+REL_BUILD_DONE := tmp/rel_build.touch
+
+# !! Important: Please keep those variables in sync with builderl.hrl
+RELTOOL_CONFIG := etc/reltool.config
+REL_PATH       := tmp/rel
+BUILD_INFO     := tmp/_build_info.tpl
+RELEASE_DATA   := tmp/release.data
+LOCAL_VM_ARGS  := tmp/vm_local.args
+
+comma:=,
+empty:=
+space:=$(empty) $(empty)
+dep_separator:=%
+
+#
+# NOTE: Application versions are stored in src/vsn.mk files.
+#       This regexp extracts the version value from the file.
+#
+vsn_regexp := 's|VSN[^0-9]*\([0-9]*\)|\1|p'
+include_regexp := 's/^-include("\([^"]*\).*$$/\1/p'
+include_lib_regexp := 's/^-include_lib("\([^"]*\).*$$/\1/p'
+parse_transform_regexp := 's/^-compile({parse_transform,[ ]*\([^}]*\)}).*$$/\1/p'
+release_regexp := 's/^[^%]*{\([^"][^,]*\).*}.*$$/\1/p'
+mib_regexp := '/IMPORTS/,/;/{;s/^.*FROM \(.*\)$$/\1/p;}'
+
+dep_dir := tmp/dependencies/
+
+Deps_Dirs = $(shell find $(DEPS_DIR) -type d | egrep '^$(DEPS_DIR)/[^/]*$$')
+
+DATE_NOW = $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
+PWD_PATH = $(shell pwd -P)
+
+ERL ?= $(shell which erl)
+ERL := $(realpath $(ERL))
+ERLC := $(ERL:%=%c)
+
+
+./rebar:
+	$(ERL) -noshell -s inets -s ssl \
+	  -eval 'httpc:request(get, {"$(REBARURL)", []}, [], [{stream, "./rebar"}])' \
+	  -s init stop
+	chmod +x ./rebar
+
+## Take the installed version if present first then try the local version
+# REBAR=$(shell (type rebar 2>/dev/null || echo ./rebar) | tail -1 | awk '{ print $$NF }')
+
+## Or take always the local version (it's known to compile riak_pb properly)
+REBAR=$(shell echo ./rebar)
+
+compile-deps: $(REBAR)
+	$(REBAR) compile
+
+clean-deps: $(REBAR)
+	$(REBAR) clean
+
+
+# NOTE: Recursive wildcard function to extract a list of files contained in
+#       a given directory. This is a variation of an original implementation
+#       found at:
+#
+#       http://www.mail-archive.com/help-make@gnu.org/msg05279.html
+#       http://www.mailinglistarchive.com/help-make@gnu.org/msg00400.html
+#
+#       Re: use of wildcard function recursively
+#       John Graham-Cumming
+#
+#       rwildcard = \
+#         $(foreach d,\
+#                   $(wildcard $1*),\
+#                   $(call rwildcard,$d/)$(filter $(subst *,%,$2),$d))
+#
+#       This version uses deferred assignments, my attempt at making the
+#       algorithm more legible than the original.
+#
+rw_collect_dirs = $(filter %/,$(wildcard $(1:%/=%)/*/))
+rw_dirs_only = $(rw_collect_dirs:%/=%)
+rw_files_only = $(filter-out %/,$(wildcard $(1:%/=%)/*/))
+rwildcard = $(foreach dir, $(rw_dirs_only), $(call rwildcard,$(dir)) ) $(rw_files_only)

@@ -1,0 +1,82 @@
+# -*- mode: Makefile -*-
+# Copyright (c) 2015, Grzegorz Junka
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+# * Redistributions of source code must retain the above copyright notice, this
+#   list of conditions and the following disclaimer.
+#
+# * Redistributions in binary form must reproduce the above copyright notice,
+#   this list of conditions and the following disclaimer in the documentation
+#   and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+repo_base_url = $(GITURL)
+deps_vsns_dir = deps-versions
+
+ifndef DEPSVSN
+
+curr_branch = $(shell git rev-parse --abbrev-ref HEAD)
+
+# Include dependencies for the current branch.
+# If they can't be found, use dependencies for 'develop' if the name
+# of the current branch starts with 'develop'. Otherwise always use
+# dependencies for 'master' (default).
+ifeq ($(wildcard $(deps_vsns_dir)/$(curr_branch)),)
+is_develop = $(shell git rev-parse --abbrev-ref HEAD | grep -e ^$(GITDEVELOP))
+ifeq ($(is_develop),)
+curr_branch = $(GITMASTER)
+else
+curr_branch = $(GITDEVELOP)
+endif
+endif
+
+else # DEPSVSN
+
+ifeq ($(wildcard $(deps_vsns_dir)/$(DEPSVSN)),)
+$(error "Dependency version '$(DEPSVSN)' doesn't exist in '$(deps_vsns_dir)'")
+endif
+
+curr_branch = $(DEPSVSN)
+
+endif # DEPSVSN
+
+include $(deps_vsns_dir)/$(curr_branch)
+
+# NOTE: By default includes 'deps-versions/master' unless the current
+#       git branch starts with 'develop', in which case
+#       'deps-versions/develop' will be used.
+#
+#       Use DEPSVSN to specify a particular dependency version, e.g.:
+#
+#       make get-deps DEPSVSN=master-new
+.PHONY: get-deps
+get-deps: $(REBAR)
+	$(REBAR) get-deps
+	@echo
+	@echo ------------------------------------------------------------------------
+	@echo Fetching dependencies for branch \'$(curr_branch)\'
+	@echo ========================================================================
+	@echo
+	for dep in $(dep_clone_args); do \
+		(cd lib && git clone $$dep) ; \
+	done
+
+.PHONY: rm-deps
+rm-deps: $(REBAR)
+	$(REBAR) del-deps
+	for dep in $(deps); do \
+		rm -rf lib/$$dep ; \
+	done

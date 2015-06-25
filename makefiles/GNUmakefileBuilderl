@@ -33,7 +33,9 @@ BLDERLURL  ?= -b master git://github.com/yoonka/builderl.git $(BLDERLPATH)/
 # An optional custom makefile to include
 CUSTOMMK   ?= GNUmakefileCustom
 # Skip fetching builderl for specific targets, space-separated list
-SKIPBLDERL ?= clean
+SKIPBLDERL ?= clean rm-deps
+# Tested version known to compile riak_pb properly
+REBARURL   ?= https://github.com/yoonka/erlstrap/wiki/rebar
 #-------------------------------------------------------------------------------
 
 ifneq ($(MAKECMDGOALS),$(filter $(MAKECMDGOALS),$(SKIPBLDERL)))
@@ -52,7 +54,8 @@ ifneq ($(ISBLDERL),0)
 $(error Can not pull the repository)
 endif
 
-include $(BLDERLPATH)/makefiles/main
+incs := common rel_app_vars deps targets configs clean debug
+include $(foreach file,$(incs),$(BLDERLPATH)/makefiles/$(file))
 endif # for SKIPBLDERL
 
 ifneq ($(wildcard $(CUSTOMMK)),)

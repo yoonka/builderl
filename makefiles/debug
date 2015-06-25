@@ -1,0 +1,89 @@
+# -*- mode: Makefile -*-
+# Copyright (c) 2015, Peter Mander
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+# * Redistributions of source code must retain the above copyright notice, this
+#   list of conditions and the following disclaimer.
+#
+# * Redistributions in binary form must reproduce the above copyright notice,
+#   this list of conditions and the following disclaimer in the documentation
+#   and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+make_executable := $(shell which $(MAKE))
+
+.PHONY: unit_test
+unit_test: dev
+	MAKE_GOAL=run \
+	SHELL="$(make_executable)" script -a ./tmp/$@.log
+
+# run: dev
+# 	$(ERL) -args_file $(LOCAL_VM_ARGS) -boot releases/$(Rel_Vsn)/cmd
+
+# NOTE: Map the application name to the release it appears in.
+#
+$(foreach rel_name, $(Rel_Names),\
+  $(foreach app_name, $($(rel_name)_rel_apps),\
+    $(eval $(app_name)_is_in_release += $(rel_name)) ) )
+
+# DEBUGGING TOOL
+
+%.wibble:
+	$(info Application $* appears in: $(dia_rels))
+	$(info Which in turn contains applications: $(dia_app_list))
+	$(info Of which there are OTP application: $(dia_otp))
+	$(info Of which there are release applications: $(dia_apps))
+	$(info Needing PLT files: $(dia_plt_files))
+	$(info Needing BEAM files: $(dia_beam_files))
+
+bullet:=$(space)$(space)*$(space)
+display = $(foreach suffix,\
+	_app \
+	_app_vsn \
+	_module_erl \
+	_module_beam \
+	_mibs \
+	_mib_bin_files \
+	_app_dependencies \
+	_src_file \
+	_file \
+	_module \
+	_has_vsn \
+	_rel_app \
+	_is_in_release \
+	,\
+	$(info $(value:%=%$(suffix)) )\
+	$(foreach value,$($(value:%=%$(suffix))), \
+	$(info $(bullet)$(value) ) ) )
+
+?%.beam ?%.app:
+	$(info ==== DEBUG Target $(@:?%=%) BEGIN ==== )
+	$(foreach value,$(*),$(display))
+
+?%.erl.d:
+	$(info ==== $@ ==== )
+	$(if $(d_parse_xform_apps),\
+	  $(info d_parse_xform_apps ),\
+	  $(info d_parse_xform_apps is empty) )
+	$(foreach value,$(d_parse_xform_apps),$(info $(bullet)$(value)) )
+	$(info d_parse_xform_dep $(d_parse_xform_dep))
+	$(info ======== )
+	$(info ==== DEBUG Target $(@:?%=%) END ==== )
+
+?%:
+	$(info $(*) )
+	$(foreach value,$($(*)), \
+	  $(info $(bullet)$(value) ) )

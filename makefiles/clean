@@ -22,3 +22,40 @@
 # CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+clean_app_dirs = $(strip \
+  $(foreach app_name, $(App_Names), lib/$(app_name)/ebin lib/$(app_name)/priv/mibs ) )
+
+clean_editor_backup = \
+  $(wildcard lib/*/src/*~) \
+  $(wildcard lib/*/include/*~) \
+  $(wildcard *~)
+
+.PHONY: dep-clean clean-logs clean-dev clean-rel clean-tgz clean
+
+dep-clean:
+	rm -rf $(dep_dir)
+
+clean-logs:
+	rm -rf erl_crash.dump
+	rm -rf log/
+	rm -rf tmp/log
+
+clean-dev:
+	rm -rf releases/$(Rel_Vsn)
+	rm -rf releases/start_erl.data
+	rm -f $(bin_files)
+	rm -f $(DEV_BUILD_DONE) $(BUILD_INFO) $(LOCAL_VM_ARGS)
+
+clean-rel:
+	rm -rf $(REL_PATH)
+	rm -f $(REL_BUILD_DONE)
+	rm -f $(RELEASE_DATA)
+
+clean-tgz:
+	rm -f $(REL_PATH)/../*.tgz
+
+clean: dep-clean clean-logs clean-tgz clean-rel clean-dev \
+  clean-deps clean-doc
+	rm -rf $(DEPS_DIR)/builderl
+	rm -rf $(clean_app_dirs) $(clean_editor_backup)

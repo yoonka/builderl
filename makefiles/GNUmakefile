@@ -26,29 +26,19 @@
 
 # Created from:
 # https://raw.githubusercontent.com/yoonka/builderl/master/makefiles/GNUmakefile
-# This is the bootstrap makefile that only downloads the actual makefile
-# Feel free to include either version in your project
-# This version makes it easier to automatically include the latest version
-# Just delete GNUmakefileBuilderl and the newest version will be downloaded
-# It's recommended that both makefiles are added to the project's repository
+# This is the bootstrap makefile that only downloads the actual makefile.
+# Feel free to include either version in your project.
+# This version makes it easier to automatically include the latest version.
+# Just delete GNUmakefileBuilderl and the newest version will be downloaded.
+# It's recommended that both makefiles are added to the project's repository.
 #-------------------------------------------------------------------------------
-
-## These are defaults used in GNUmakefileBuilderl, change if needed
-#-------------------------------------------------------------------------------
-## Where builderl should be located in the project tree
-# BLDERLPATH ?= deps/builderl/
-## Details of the builderl repository
-# BLDERLURL  ?= -b master git://github.com/yoonka/builderl.git $(BLDERLPATH)
-## An optional custom makefile to include
-# CUSTOMMK   ?= GNUmakefileCustom
-#-------------------------------------------------------------------------------
+# Credit for the Erlang downloading tip:
+# https://groups.google.com/forum/?fromgroups=#!topic/erlang-programming/U0JJ3SeUv5Y
 
 # Local name for the downloaded builderl/makefiles/GNUmakefileBuilderl
 BLDERLLOCAL := GNUmakefileBuilderl
 # URL to download the builderl/makefiles/GNUmakefileBuilderl makefile
 BLDERLMKURL := https://raw.githubusercontent.com/yoonka/builderl/master/makefiles/GNUmakefileBuilderl
-# Skip fetching builderl for those targets
-SKIPBLDERL  := clean rm-deps
 
 ifeq ($(wildcard $(BLDERLLOCAL)),)
 $(shell erl -noshell -s inets -s ssl -eval \
@@ -63,5 +53,35 @@ endif
 ifeq ($(wildcard $(BLDERLLOCAL)),)
 $(shell curl -O $(BLDERLMKURL))
 endif
+
+## These are defaults used in GNUmakefileBuilderl, change if needed
+#-------------------------------------------------------------------------------
+## Where builderl should be located in the project tree
+# BLDERLPATH ?= deps/builderl/
+## Details of the builderl repository
+# BLDERLURL  ?= -b master git://github.com/yoonka/builderl.git $(BLDERLPATH)
+## An optional custom makefile to include
+# CUSTOMMK   ?= GNUmakefileCustom
+#-------------------------------------------------------------------------------
+
+## Defaults used in other builderl makefiles, change if needed
+#-------------------------------------------------------------------------------
+## Skip fetching builderl for those targets
+# SKIPBLDERL ?= clean rm-deps
+## Tested version known to compile riak_pb properly
+# REBARURL   ?= https://github.com/yoonka/erlstrap/wiki/rebar
+#-------------------------------------------------------------------------------
+
+# Additional project-specific variables and settings
+#-------------------------------------------------------------------------------
+## Location of the Git repository
+# GITURL     ?= https://github.com/ExampleNotExistentAccount
+## Name of the development branch, uses dependencies specified for this branch
+## if the current branch starts with the name of the development branch
+# GITDEVELOP ?= develop
+## Name of the default branch, uses default set of dependencies
+# GITMASTER  ?= master
+## Compilation flags, edit as needed
+# ERLCFLAGS  ?= -W -v -pa deps/lager/ebin +debug_info +'{parse_transform, lager_transform}'
 
 include $(BLDERLLOCAL)
