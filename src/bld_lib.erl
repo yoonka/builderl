@@ -43,13 +43,21 @@
          chmod/2,
          mk_link/2,
          mk_dir/1,
+         ensure_member/2,
+         get_rel_dir/0,
          read_builderl_config/0,
          read_builderl_config/1,
+         get_cmd_rel/1,
+         get_release_name/2,
          get_node_name/2,
+         get_config_module/2,
+         get_port_offset/2,
          get_default_nodes/1,
+         get_default_joins/1,
          get_allowed/1,
          get_params/1,
-         get_rel_dir/0,
+         keyget/3,
+         keyget/2,
          start_node/2,
          running_nodes/0,
          connect_to_node/1,
@@ -197,15 +205,21 @@ mk_dir(Name) ->
     io:format(standard_io, "Create folder '~s': ", [Name]),
     check_file_op(file:make_dir(Name)).
 
-%%------------------------------------------------------------------------------
+ensure_member(Elem, List) ->
+    case lists:member(Elem, List) of
+        true -> List;
+        false -> [Elem | List]
+    end.
 
-read_builderl_config() ->
-    read_builderl_config(get_rel_dir()).
+%%------------------------------------------------------------------------------
 
 get_rel_dir() ->
     {_, Vsn} = start_erl_data(),
     filename:join("releases", Vsn).
 
+
+read_builderl_config() ->
+    read_builderl_config(get_rel_dir()).
 
 read_builderl_config(RelDir) ->
     CfgFile = filename:join(RelDir, ?BUILDERL_CONFIG),
@@ -220,8 +234,32 @@ read_builderl_config(RelDir) ->
     end.
 
 
+get_cmd_rel(Config) ->
+    case lists:keyfind(setup_config, 1, Config) of
+        false -> "cmd";
+        {setup_config, CmdRel, _, _} -> CmdRel
+    end.
+
+
+get_release_name(Type, BldCfg) ->
+    element(3, get_node_type(Type, BldCfg)).
+
+
 get_node_name(Type, BldCfg) ->
     element(4, get_node_type(Type, BldCfg)).
+
+
+get_config_module(Type, BldCfg) ->
+    element(5, get_node_type(Type, BldCfg)).
+
+
+%% Constant offset to add to the port number to ensure ports are unique.
+%% When installing more nodes of the same type the port number
+%% is the offset plus the sequential number starting from 0 for the given type
+%% and in the order in which nodes were specified in the command line.
+%% Increase the gap if installing more than 10 nodes of the same type.
+get_port_offset(Type, BldCfg) ->
+    element(6, get_node_type(Type, BldCfg)).
 
 
 get_node_type(Type, [{node_type, Type, _, _, _, _} = Node|_]) -> Node;
@@ -234,7 +272,11 @@ halt_bad_node_type(Type) ->
 
 
 get_default_nodes(BldCfg) ->
-    element(2, lists:keyfind(default_nodes, 1, BldCfg)).
+    keyget(default_nodes, BldCfg, []).
+
+
+get_default_joins(BldCfg) ->
+    keyget(default_joins, BldCfg, []).
 
 
 get_allowed(BldCfg) ->
@@ -245,6 +287,16 @@ get_params(BldCfg) ->
     Allowed = [atom_to_list(T) || {node_type, T, _, _, _, _} <- BldCfg],
     {ok, SuffixRe} = re:compile(?SUFFIX_RE),
     {Allowed, SuffixRe, BldCfg}.
+
+%% Allows List to contain tuples with any amount of terms
+keyget(Key, List, Default) ->
+    case lists:keyfind(Key, 1, List) of
+        false -> Default;
+        Tuple -> element(2, Tuple)
+    end.
+
+keyget(Key, List) ->
+    keyget(Key, List, undefined).
 
 %%------------------------------------------------------------------------------
 

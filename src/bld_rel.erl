@@ -54,7 +54,7 @@ mk_dev() ->
     write_vm_local_args(CodePaths),
 
     ErtsVsn = erlang:system_info(version),
-    Vsn = proplists:get_value(boot_version, BldCfg),
+    Vsn = bld_lib:keyget(boot_version, BldCfg),
     write_start_erl_data(ErtsVsn, Vsn),
     write_build_info(Vsn),
     write_builderl_config(Vsn, BldCfg),
@@ -73,7 +73,7 @@ mk_rel(BldLink) ->
 
     link_builderl(BldLink, ?REL_PATH),
 
-    Vsn = proplists:get_value(boot_version, BldCfg),
+    Vsn = bld_lib:keyget(boot_version, BldCfg),
     RelDir = filename:join("releases", Vsn),
     bld_lib:cp_file(RelDir, filename:join(?REL_PATH, RelDir), ?BUILDERL_CONFIG),
 
@@ -98,7 +98,8 @@ get_builderl_config(File) ->
     DeepRels = [ [R || {rel, R, _, _} <- S] || {config, {sys, S}} <- File],
     Rels = lists:foldl(fun(List, Acc) -> List ++ Acc end, [], DeepRels),
     RelTypes = proplists:get_value(release_types, Config, []),
-    verify_rel_names(Rels, [X || {_, X, _, _, _} <- RelTypes]),
+    CmdRel = bld_lib:get_cmd_rel(Config),
+    verify_rel_names(Rels, [CmdRel | [X || {_, X, _, _, _} <- RelTypes]]),
     Config.
 
 verify_rel_names(Rels, [N | T]) ->
@@ -242,12 +243,22 @@ write_builderl_config(RelVsn, Cfg) ->
     io:format(" => Create file: ~s~n", [File]),
     Terms = proplists:get_value(release_types, Cfg, []),
     Recs = [{node_type, A, B, C, D, E} || {A, B, C, D, E} <- Terms],
-    bld_lib:write_terms(File, [default_nodes(Cfg) | Recs]).
+    ToWrite = Recs ++ set_up_cfg(Cfg) ++ def_nodes(Cfg) ++ def_joins(Cfg),
+    bld_lib:write_terms(File, ToWrite).
 
-default_nodes(Cfg) ->
-    case lists:keyfind(default_nodes, 1, Cfg) of
-        false -> {default_nodes, []};
-        Nodes -> Nodes
+set_up_cfg(Cfg) ->
+    get_tuple_list(setup_config, Cfg).
+
+def_nodes(Cfg) ->
+    get_tuple_list(default_nodes, Cfg).
+
+def_joins(Cfg) ->
+    get_tuple_list(default_joins, Cfg).
+
+get_tuple_list(Key, List) ->
+    case lists:keyfind(Key, 1, List) of
+        false -> [];
+        Val -> [Val]
     end.
 
 
