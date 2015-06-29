@@ -98,9 +98,16 @@ get_builderl_config(File) ->
     DeepRels = [ [R || {rel, R, _, _} <- S] || {config, {sys, S}} <- File],
     Rels = lists:foldl(fun(List, Acc) -> List ++ Acc end, [], DeepRels),
     RelTypes = proplists:get_value(release_types, Config, []),
-    CmdRel = bld_lib:get_cmd_rel(Config),
-    verify_rel_names(Rels, [CmdRel | [X || {_, X, _, _, _} <- RelTypes]]),
+    CmdRel = get_cmd_rel(Config),
+    verify_rel_names(Rels, [X || {_, X, _, _, _} <- RelTypes] ++ CmdRel),
     Config.
+
+get_cmd_rel(Cfg) ->
+    case lists:keyfind(setup_config, 1, Cfg) of
+        false -> [];
+        {setup_config, undefined, _, _} -> [];
+        {setup_config, CmdRel, _, _} -> [CmdRel]
+    end.
 
 verify_rel_names(Rels, [N | T]) ->
     case lists:member(N, Rels) of
@@ -247,7 +254,14 @@ write_builderl_config(RelVsn, Cfg) ->
     bld_lib:write_terms(File, ToWrite).
 
 set_up_cfg(Cfg) ->
-    get_tuple_list(setup_config, Cfg).
+    case lists:keyfind(setup_config, 1, Cfg) of
+        false ->
+            [];
+        {setup_config, CmdRel, SetupApp, SetupMod} ->
+            [{cmd_release, CmdRel},
+             {setup_application, SetupApp},
+             {setup_module, SetupMod}]
+    end.
 
 def_nodes(Cfg) ->
     get_tuple_list(default_nodes, Cfg).

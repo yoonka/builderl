@@ -47,7 +47,6 @@
          get_rel_dir/0,
          read_builderl_config/0,
          read_builderl_config/1,
-         get_cmd_rel/1,
          get_release_name/2,
          get_node_name/2,
          get_config_module/2,
@@ -231,13 +230,6 @@ read_builderl_config(RelDir) ->
         {error, Err} ->
             io:format("Error '~p', aborting.~n", [Err]),
             halt(1)
-    end.
-
-
-get_cmd_rel(Config) ->
-    case lists:keyfind(setup_config, 1, Config) of
-        false -> "cmd";
-        {setup_config, CmdRel, _, _} -> CmdRel
     end.
 
 
