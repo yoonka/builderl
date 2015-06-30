@@ -26,40 +26,185 @@
 
 -include_lib("builderl/include/builderl.hrl").
 
--export([
-         runtime_variables/0,
-         do/2,
-         check_joins/2,
-         type_suffix/2,
-         read_config/1,
-         merge_config/2,
-         check_release/0,
-         check_not_running/1,
-         check_folder/2,
-         install_cookie/3,
-         get_rel_data/3,
-         name_param/3,
-         get_host/1,
-         mk_vm_args/4,
-         create_start_scripts/3,
-         node_package_setup/3,
-         get_priv_dirs/4,
-         start_nodes/1,
-         stop_nodes/1,
-         wait_for_nodes/1,
-         connect_to_started/1,
-         install_known/6
-        ]).
+-export([do/1]).
 
 -define(CMDSH, fun(NodeName) -> NodeName ++ ".cmd.sh" end).
 -define(TIMEOUT, 15000).
+
+%% Folder that can be used to load patches to the running system.
+%% Since the script installs OTP releases that should be upgraded using the
+%% OTP release handler, we don't want the patches folder to be per node nor
+%% to be easily accessible to prevent people from using it as a mean to upgrade
+%% nodes. One common patches folder for quick checks should be enough.
+-define(PATCHES, <<"/tmp/code_patches">>).
 
 -define(RELCHECK,
         [{dir, <<"lib">>},
          {file, <<"releases/start_erl.data">>}
         ]).
 
+-define(DIRS,
+        [<<"bin">>,
+         <<"etc">>,
+         <<"etc/init.d">>,
+         <<"config">>,
+         <<"log">>,
+         <<"sasl_logfiles">>,
+         <<"shell">>]).
+
+usage(DefNodes, DefJoins, Allowed) ->
+    [
+     "************************************************************************",
+     "This script installs and configures an OTP-compliant release.",
+     "It creates new target folders, one folder per each node, alongside",
+     "the folder containing the release (as siblings of that folder).",
+     "All nodes share the same code contained in the release folder but use",
+     "the created target folders to store data specific to each node",
+     "(e.g. logs, the mnesia database, configuration files, etc.).",
+     "This script should be run from the root of the folder containing the",
+     "release.",
+     "",
+     "Usage:",
+     "",
+     "  init.esh -h | --help",
+     "  init.esh [-f] [--config <section>]",
+     "           [-i (<type> | <type>-<suffix>)]...",
+     "           [-s (<type> | <type>-<suffix>)]...",
+     "           [-j (<type> | <type>-<suffix> | <node@host>)[, ...]]...",
+     "",
+     "  init.esh [-f] [--config <section>]",
+     "    Calling init.esh without neither '-i' nor '-s' automatically adds",
+     "    the following default options:",
+     "      " ++ DefNodes,
+     "      " ++ DefJoins,
+     "",
+     "During installation the following steps are executed:",
+     " 1. Create the destination folder for each node.",
+     " 2. Set up the node, copy and update the configuration files.",
+     " 3. Start all nodes supplied with '-i' or '-s'.",
+     " 4. Execute the installation module on nodes supplied with '-i'.",
+     " 5. Stop all nodes supplied with '-i'",
+     "    (nodes supplied with '-s' remain running).",
+     "",
+     "Options:",
+     "",
+     "  -h, --help",
+     "    This help.",
+     "",
+     "  -f",
+     "    Force install, delete the target folders if they already exist.",
+     "",
+     "  --config section",
+     "    Name of the config section from the 'etc/init.conf' file. This file",
+     "    contains additional strings that will be replaced in application",
+     "    configuration files when installing them to the 'config' folder",
+     "    on the target system.",
+     "    If the section is not specified explicitly then the script tries",
+     "    to read the name of the section from the environment variable",
+     "    'HOSTNAME'.",
+     "",
+     "  -i <type>, -i <type>-<suffix>",
+     "    Installs the specified node into a new folder, installs the",
+     "    configuration files, starts the node, executes the installation",
+     "    module and stops the node.",
+     "    Can be specified multiple times, e.g.: -i node1 -i node2.",
+     "    Accepted types are: " ++ string:join(Allowed, ", ") ++ ".",
+     "    Multiple nodes of the same type may be installed by listing them",
+     "    with an optional suffix, e.g.: -i node-1 -i node-2.",
+     "    Suffix must match the following regular expression: '^[\\w-.#+]+$'.",
+     "",
+     "  -s <type>, -s <type>-<suffix>",
+     "    Similar to '-i' above but stops after the nodes have been set up,",
+     "    without executing the installation module on the installed nodes.",
+     "    To be used when some nodes need to be installed and configured",
+     "    together. It will install the specified node in a new folder,",
+     "    install the configuration files, then it will start the specified",
+     "    node and will leave it running. That node can then be supplied with",
+     "    the '-j' argument when installing another node.",
+     "    (See '-j' for more information).",
+     "",
+     "  -j (<type> | <type>-<suffix> | <node@host>)...",
+     "    Used by the node installation module (e.g. to create a shared mnesia",
+     "    scheme). Causes the list of nodes specified after a single '-j' to",
+     "    be configured together. Can be specified multiple times and each",
+     "    list is space-separated (the list is collected until another option",
+     "    is found or until the end of the line), e.g.:",
+     "    -j node-1 node-2 node-3 -j service 'node@host.org -j database",
+     "",
+     "    Nodes specified with <type> or <type>-<suffix> also need to be",
+     "    specified with '-i' so that they can be installed and configured,",
+     "    and the proper node names used when executing the installation",
+     "    module.",
+     "",
+     "    Nodes specified with <node@host> are assumed to be already installed",
+     "    and started (see '-s' above). Value of <node@host> should be an atom",
+     "    as returned from erlang:node/0 on the actual node. Host 'host' may",
+     "    be either a short name or a fully qualified name. All <node@host>",
+     "    values will be passed to the installation script as is, however the",
+     "    script will try to connect to the specified nodes before progressing",
+     "    with the configuration. Therefore nodes specified with <node@host>",
+     "    should use the same cookie as one of the nodes installed with '-i'",
+     "    during the same script execution, otherwise the script won't be able",
+     "    to connect to such node.",
+     "",
+     "    This option may be specified multiple times with the same nodes.",
+     "    Each occurence will result in executing the installation module with",
+     "    all nodes specified for a particular occurence of '-j' as one of the",
+     "    arguments of that execution.",
+     "************************************************************************"
+    ].
+
 %%------------------------------------------------------------------------------
+
+do(Args) ->
+    check_release(),
+    RunVars = runtime_variables(),
+    do1(Args, RunVars).
+
+do1(["-h"], RunVars) ->     print_usage(RunVars);
+do1(["--help"], RunVars) -> print_usage(RunVars);
+do1(Other, RunVars) ->      do2(Other, RunVars).
+
+print_usage(RunVars) ->
+    DefNodes = bld_lib:get_default_nodes(RunVars),
+    DefJoins = bld_lib:get_default_joins(RunVars),
+    Nodes = ["-i " | string:join(DefNodes, " -i ")],
+    Joins = string:join(joins_to_str(DefJoins, ""), " "),
+    Allowed = bld_lib:get_allowed(RunVars),
+    bld_lib:print(usage(Nodes, Joins, Allowed)).
+
+joins_to_str([{join, List} | T], Acc) ->
+    Nodes = string:join(joins_to_str(List, ""), " "),
+    joins_to_str(T, [Nodes, "-j" | Acc]);
+joins_to_str([{Node, []} | T], Acc) ->
+    joins_to_str(T, [atom_to_list(Node) | Acc]);
+joins_to_str([{Node, Suffix} | T], Acc) ->
+    joins_to_str(T, [atom_to_list(Node) ++ "-" ++ Suffix | Acc]);
+joins_to_str([], Acc) ->
+    lists:reverse(Acc).
+
+do2(Other, RunVars) ->
+    Params = bld_lib:get_params(RunVars),
+    Options = parse(Other, Params),
+    kick_off(Params, Options).
+
+check_release() ->
+    Fun = fun({dir, Dir}) -> filelib:is_dir(Dir);
+             ({file, File}) -> filelib:is_regular(File)
+          end,
+
+    case lists:all(Fun, ?RELCHECK) of
+        true -> ok;
+        false -> bld_lib:print(err1()), halt(1)
+    end.
+
+err1() ->
+    [
+     "Incorrect folder structure!",
+     "Please make sure that the release has been created correctly and run",
+     "this script from the root of the folder containing the release.",
+     "Use -h or --help for more options."
+    ].
 
 runtime_variables() ->
     {_, Vsn} = StartErl = bld_lib:start_erl_data(),
@@ -91,25 +236,25 @@ is_fqdn(_, _) -> false.
 
 %%------------------------------------------------------------------------------
 
-do(Args, Params) ->
-    do(Args, Params, false, []).
+parse(Args, Params) ->
+    parse(Args, Params, false, []).
 
-do(["--config", Config | T], P, J, Acc) ->
-    do(T, P, false, add_config(Config,                 add_joins(J, Acc)));
-do(["-f" | T],               P, J, Acc) ->
-    do(T, P, false, bld_lib:ensure_member(do_delete,   add_joins(J, Acc)));
-do(["-i", Node | T],         P, J, Acc) ->
-    do(T, P, false, bld_lib:add_node(Node, install, P, add_joins(J, Acc)));
-do(["-s", Node | T],         P, J, Acc) ->
-    do(T, P, false, bld_lib:add_node(Node, setup,   P, add_joins(J, Acc)));
-do(["-j", Type | T],         P, J, Acc) ->
-    do(T, P, [add_join_type(Type, P)],                 add_joins(J, Acc));
-do([],                       P, J, Acc) ->
+parse(["--config", Config | T], P, J, Acc) ->
+    parse(T, P, false, add_config(Config,                 add_joins(J, Acc)));
+parse(["-f" | T],               P, J, Acc) ->
+    parse(T, P, false, bld_lib:ensure_member(do_delete,   add_joins(J, Acc)));
+parse(["-i", Node | T],         P, J, Acc) ->
+    parse(T, P, false, bld_lib:add_node(Node, install, P, add_joins(J, Acc)));
+parse(["-s", Node | T],         P, J, Acc) ->
+    parse(T, P, false, bld_lib:add_node(Node, setup,   P, add_joins(J, Acc)));
+parse(["-j", Type | T],         P, J, Acc) ->
+    parse(T, P, [add_join_type(Type, P)],                 add_joins(J, Acc));
+parse([],                       P, J, Acc) ->
     add_seq(P, ensure_nodes(P, lists:reverse(add_joins(J, Acc))));
-do(Other,                    _P, false, _Acc) ->
+parse(Other,                    _P, false, _Acc) ->
     bld_lib:halt_badarg(Other);
-do([Type | T],               P, J, Acc) ->
-    do(T, P, [add_join_type(Type, P) | J], Acc).
+parse([Type | T],               P, J, Acc) ->
+    parse(T, P, [add_join_type(Type, P) | J], Acc).
 
 add_joins(false, Acc) -> Acc;
 add_joins(Join, Acc) -> [{join, lists:reverse(Join)} | Acc].
@@ -161,6 +306,46 @@ add_seq(P, [Other | T], NewOptions, Counters) ->
     add_seq(P, T, [Other | NewOptions], Counters);
 add_seq(_P, [], NewOptions, _Counters) ->
     lists:reverse(NewOptions).
+
+%%------------------------------------------------------------------------------
+
+kick_off({_, _, RunVars}, Options) ->
+    Nodes = [{A, T, S, Seq, D} || {node, A, T, S, Seq, D} <- Options],
+    Names = [{bld_lib:node_name(T, S, RunVars), Dir}
+             || {_A, T, S, _Seq, Dir} <- Nodes],
+    Clusters = [J || {join, J} <- Options],
+    check_joins(Clusters, Options),
+
+    io:format("~nUsing options:~n~p~n", [Options]),
+    InitConf = read_config(proplists:get_value(config, Options)),
+    io:format("~nInitConf merged:~n~p~n", [InitConf]),
+    check_not_running([Node || {Node, _Dir} <- Names]),
+
+    io:format(standard_io, "~n => Ensure '~s' exists: ", [?PATCHES]),
+
+    io:format(standard_io, "~n => Checking for existing folders...~n~n", []),
+    Delete = lists:member(do_delete, Options),
+    FolderFun = fun({_N, Dir}) -> check_folder(Dir, Delete) end,
+    lists:foreach(FolderFun, Names),
+
+    io:format(standard_io, "~n => Setting up nodes...~n", []),
+    Fun = fun(Opt) -> do_install(Opt, InitConf, RunVars) end,
+    lists:foreach(Fun, Nodes),
+
+    start_nodes(Names),
+    Connected = wait_for_nodes(Nodes),
+
+    Joins = lists:usort(lists:flatten(Clusters)),
+    Known = lists:usort([X || {_T, _S} = X <- Joins]),
+    Added = lists:usort([X || X <- Joins, is_atom(X)]),
+
+    ToConnect = [R || {_A, R, _T, _S} <- Connected] ++ Added,
+    Installs = [{R, T, S} || {install, R, T, S} <- Connected],
+
+    connect_to_started(Added),
+    install_known(
+      Installs, ToConnect, Clusters, Known, InitConf, RunVars),
+    io:format(standard_io, "~nFinished.~n", []).
 
 %%------------------------------------------------------------------------------
 
@@ -276,25 +461,6 @@ merge_config(_OldElem, NewElem) ->
 
 %%------------------------------------------------------------------------------
 
-check_release() ->
-    Fun = fun({dir, Dir}) -> filelib:is_dir(Dir);
-             ({file, File}) -> filelib:is_regular(File)
-          end,
-
-    case lists:all(Fun, ?RELCHECK) of
-        true -> ok;
-        false -> bld_lib:print(err1()), halt(1)
-    end.
-
-err1() ->
-    [
-     "Incorrect folder structure!",
-     "Please make sure that the release has been created correctly and run",
-     "this script from the root of the folder containing the release.",
-     "Use -h or --help for more options."
-    ].
-
-
 check_not_running(Nodes) ->
     case bld_lib:intersection(bld_lib:running_nodes(), Nodes) of
         [] -> ok;
@@ -340,6 +506,30 @@ err2(Name) ->
 
 %%------------------------------------------------------------------------------
 
+do_install({_Action, Type, Suffix, Seq, Base}, InitConf, RunVars) ->
+    bld_lib:h_line("~n---" ++ type_suffix(Type, Suffix)),
+    io:format(standard_io, "Installing in '" ++ Base ++ "'.~n", []),
+    bld_lib:mk_dir(Base),
+    SetupMod = bld_lib:keyget(setup_module, RunVars),
+    do_subfolders(SetupMod, Base),
+    Cookie = install_cookie(Type, Base, RunVars),
+    Offset = bld_lib:get_port_offset(Type, RunVars) + Seq,
+    create_node_configs(
+      SetupMod, Type, Base, Suffix, Cookie, Offset, InitConf, RunVars).
+
+do_subfolders(SetupMod, Base) ->
+    Msg = "Creating subfolders in '" ++ Base ++ "'...~n",
+    io:format(standard_io, Msg, []),
+    SubFun = fun(Dir) -> bld_lib:mk_dir(filename:join(Base, Dir)) end,
+    lists:foreach(SubFun, ?DIRS ++ get_subfolders(SetupMod)).
+
+get_subfolders(undefined) ->
+    [];
+get_subfolders(Mod) ->
+    {ok, Folders} = Mod:subfolders(),
+    Folders.
+
+
 install_cookie(Type, Base, RunVars) ->
     File = filename:join(Base, ".erlang.cookie"),
     Cookie = bld_lib:get_node_name(Type, RunVars) ++ "_cookie",
@@ -348,6 +538,34 @@ install_cookie(Type, Base, RunVars) ->
     Cookie.
 
 %%------------------------------------------------------------------------------
+
+create_node_configs(
+  SetupMod, Type, Base, Suffix, Cookie, Offset, InitConf, RunVars) ->
+    {ErtsVsn, _Vsn} = proplists:get_value(start_erl, RunVars),
+    RelDir = proplists:get_value(rel_dir, RunVars),
+    Data = get_rel_data(RelDir, Type, RunVars),
+    CmdData = get_rel_data(RelDir, cmd, RunVars),
+    Name = bld_lib:node_name(Type, Suffix, RunVars),
+
+    KeyReplace = get_key_replace(SetupMod, Base, Name, Offset, RunVars),
+    CfgArgs = create_args(Name, Cookie, KeyReplace, InitConf, RunVars),
+
+    mk_vm_args(Base, Data, "vm.args", CfgArgs),
+    mk_vm_args(Base, CmdData, "vm.cmd.args", CfgArgs),
+
+    RelName = bld_lib:get_release_name(Type, RunVars),
+
+    ConfigSrc = filename:join("etc", "sys.config.src"),
+    ConfigDest = filename:join(RelDir, Name ++ ".config"),
+    bld_lib:process_file(ConfigSrc, ConfigDest, CfgArgs, [force]),
+
+    create_start_scripts(RelName, Name, Base),
+    node_package_setup(ErtsVsn, Base, CfgArgs),
+
+    LibDirs = proplists:get_value(lib_dirs, Data, ["lib"]),
+    Privs = get_priv_dirs(RelDir, Type, LibDirs, RunVars),
+    process_app_configs(SetupMod, Privs, Base, CfgArgs).
+
 
 %% The *.data file is only present in the development environment where
 %% it contains configuration used when creating configuration files needed
@@ -367,7 +585,50 @@ rel_path(RelDir, Type, Ext, RunVars) ->
     Name = bld_lib:get_release_name(Type, RunVars) ++ Ext,
     filename:join(RelDir, Name).
 
-%%------------------------------------------------------------------------------
+
+get_key_replace(undefined, _Base, _Name, _Offset, _RunVars) ->
+    [];
+get_key_replace(Mod, Base, Name, Offset, RunVars) ->
+    {ok, Vars} = Mod:key_replace(Base, Name, Offset, RunVars),
+    Vars.
+
+
+create_args(Name, Cookie, KeyReplace, InitConf, RunVars) ->
+    Hostname = proplists:get_value(hostname, RunVars),
+
+    Default =
+        [
+         {<<"=NODE=">>, Name, [global]},
+         {<<"=NAMEATHOST=">>, Name ++ "@" ++ get_host(Hostname)},
+         {<<"=COOKIE=">>, Cookie},
+         {<<"=NAMEPARAM=">>, name_param(Name, Hostname, InitConf)},
+         %% Used in node_package scripts
+         {<<"{{node}}">>, Name, [global]},
+         {<<"{{runner_user}}">>, bld_lib:trim(os:cmd("whoami"))},
+         {<<"{{runner_wait_process}}">>, <<"mnesia_sup">>},
+         {<<"{{runner_ulimit_warn}}">>, <<"">>},
+         {<<"{{runner_patch_dir}}">>, ?PATCHES},
+         {<<"{{runner_release}}">>, Name},
+         {<<"{{runner_script_dir}}">>,
+          <<"\"$( cd \"$(dirname \"$0\")\" ; pwd -L )\"">>},
+         {<<"{{runner_base_dir}}">>, <<"{{abs_code_root}}">>},
+         {<<"{{runner_etc_dir}}">>, <<"{{abs_node_root}}/etc">>},
+         {<<"{{runner_log_dir}}">>, <<"{{abs_node_root}}/log">>},
+         {<<"{{runner_lib_dir}}">>, <<"{{abs_code_root}}/lib">>}
+         %% Only used in node_package version 2.0.0 or later
+         %% {<<"{{numactl_arg}}">>, <<"">>},
+         %% {<<"{{cuttlefish}}">>, <<"">>},
+         %% {<<"{{cuttlefish_conf}}">>, <<"void_cuttlefish.conf">>, [global]},
+         %% {<<"{{platform_data_dir}}">>, <<"void_cuttlefish_data_dir">>}
+        ] ++ KeyReplace,
+
+    CfgReplace = proplists:get_value(setup_key_replace, InitConf, []),
+    merge_config(Default, CfgReplace).
+
+
+get_host({local, Hostname}) -> Hostname;
+get_host({fqdn, Hostname}) -> string:sub_word(Hostname, 1, $.).
+
 
 name_param(Name, Hostname, InitConf) ->
     Opts = proplists:get_value(options, InitConf, []),
@@ -379,10 +640,6 @@ name_param1(Name, {fqdn, Hostname}, false) ->
     "-name " ++ Name ++ "@" ++ Hostname;
 name_param1(Name, {local, Hostname}, _) ->
     "-sname " ++ Name ++ "@" ++ Hostname.
-
-
-get_host({local, Hostname}) -> Hostname;
-get_host({fqdn, Hostname}) -> string:sub_word(Hostname, 1, $.).
 
 %%------------------------------------------------------------------------------
 
@@ -431,7 +688,6 @@ cmd_sh(Path, Base, Rel, CfgRel, ArgsFile) ->
      ArgsFile ++ " -boot releases/$APP_VSN/" ++ Rel ++ "\"\n"
     ].
 
-%%------------------------------------------------------------------------------
 
 node_package_setup(ErtsVsn, Base, Args) ->
     SrcDir = filename:join("erts-" ++ ErtsVsn, "bin"),
@@ -486,6 +742,35 @@ get_priv_dir(true, _, App, Name, _Dir, Path) ->
     {true, {App, Name, Path}};
 get_priv_dir(false, [], _App, _Name, _Dir, _Path) ->
     false.
+
+%%------------------------------------------------------------------------------
+
+process_app_configs(SetupMod, Privs, Base, CfgArgs) ->
+    Dest = filename:join(Base, "config"),
+    Msg = "~nProcessing configuration files, will copy to '~s'~n"
+        ++ " and in each file replace keys with the following values:~n~p~n",
+    io:format(standard_io, Msg, [Dest, CfgArgs]),
+    Fun = fun(App) -> do_app_cfg(SetupMod, App, Dest, CfgArgs, Privs) end,
+    lists:foreach(Fun, Privs).
+
+do_app_cfg(undefined, App, Dest, CfgArgs, _Privs) ->
+    process_config(App, Dest, CfgArgs);
+do_app_cfg(Mod, App, Dest, CfgArgs, Privs) ->
+    case Mod:process_config(App, Dest, CfgArgs, Privs) of
+        true -> ok;
+        false -> process_config(App, Dest, CfgArgs)
+    end.
+
+process_config({_App, Name, PrivDir}, CfgDir, CfgArgs) ->
+    process_priv_file(PrivDir, Name ++ ".conf", CfgDir, CfgArgs),
+    process_priv_file(PrivDir, Name ++ ".install.conf", CfgDir, CfgArgs).
+
+process_priv_file(PrivDir, File, CfgDir, CfgArgs) ->
+    Config = filename:join(PrivDir, File),
+    case filelib:is_regular(Config) of
+        false -> ok;
+        true -> bld_lib:process_file(Config, [CfgDir, File], CfgArgs)
+    end.
 
 %%------------------------------------------------------------------------------
 
