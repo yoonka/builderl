@@ -214,7 +214,8 @@ runtime_variables() ->
     Vars = [
             {start_erl, StartErl},
             {rel_dir, RelDir},
-            {hostname, Hostname}
+            {hostname, Hostname},
+            {is_dev, filelib:is_regular(?BUILD_INFO)}
            ] ++ BldConf,
     io:format("Using runtime variables:~n~p~n", [Vars]),
     Vars.
@@ -328,8 +329,9 @@ kick_off({_, _, RunVars}, Options) ->
     FolderFun = fun({_N, Dir}) -> check_folder(Dir, Delete) end,
     lists:foreach(FolderFun, Names),
 
+    SetupMod = get_setup_module(RunVars),
     io:format(standard_io, "~n => Setting up nodes...~n", []),
-    Fun = fun(Opt) -> do_install(Opt, InitConf, RunVars) end,
+    Fun = fun(Opt) -> do_install(Opt, SetupMod, InitConf, RunVars) end,
     lists:foreach(Fun, Nodes),
 
     start_nodes(Names),
@@ -504,13 +506,31 @@ err2(Name) ->
      "Use -h or --help for more options."
     ].
 
+
+get_setup_module(RunVars) ->
+    case bld_lib:get_setup_config(RunVars) of
+        undefined -> undefined;
+        Tuple -> get_setup_mod(bld_lib:keyget(is_dev, RunVars), Tuple)
+    end.
+
+get_setup_mod(_, {setup_config, _CmdRel, _Dir, SetupApp, _SetupVsn, SetupMod})
+  when SetupApp == undefined orelse SetupMod == undefined -> undefined;
+get_setup_mod(IsDev, {setup_config, _, Dir, SetupApp, SetupVsn, SetupMod}) ->
+    Path = setup_path(IsDev, Dir, SetupApp, SetupVsn),
+    code:add_path(Path),
+    SetupMod.
+
+setup_path(true, Dir, SetupApp, _SetupVsn) ->
+    filename:join([Dir, SetupApp, "ebin"]);
+setup_path(false, _Dir, SetupApp, SetupVsn) ->
+    filename:join(["lib", atom_to_list(SetupApp) ++ "-" ++ SetupVsn, "ebin"]).
+
 %%------------------------------------------------------------------------------
 
-do_install({_Action, Type, Suffix, Seq, Base}, InitConf, RunVars) ->
+do_install({_Action, Type, Suffix, Seq, Base}, SetupMod, InitConf, RunVars) ->
     bld_lib:h_line("~n---" ++ type_suffix(Type, Suffix)),
     io:format(standard_io, "Installing in '" ++ Base ++ "'.~n", []),
     bld_lib:mk_dir(Base),
-    SetupMod = bld_lib:keyget(setup_module, RunVars),
     do_subfolders(SetupMod, Base),
     Cookie = install_cookie(Type, Base, RunVars),
     Offset = bld_lib:get_port_offset(Type, RunVars) + Seq,
@@ -559,7 +579,7 @@ create_node_configs(
     ConfigDest = filename:join(RelDir, Name ++ ".config"),
     bld_lib:process_file(ConfigSrc, ConfigDest, CfgArgs, [force]),
 
-    create_start_scripts(RelName, Name, Base),
+    create_start_scripts(RelName, Name, Base, RunVars),
     node_package_setup(ErtsVsn, Base, CfgArgs),
 
     LibDirs = proplists:get_value(lib_dirs, Data, ["lib"]),
@@ -579,7 +599,7 @@ get_rel_data(RelDir, Type, RunVars) ->
     end.
 
 rel_path(RelDir, cmd, Ext, RunVars) ->
-    Name = bld_lib:keyget(cmd_release, RunVars, "cmd") ++ Ext,
+    Name = bld_lib:get_setup_release(RunVars, "cmd") ++ Ext,
     filename:join(RelDir, Name);
 rel_path(RelDir, Type, Ext, RunVars) ->
     Name = bld_lib:get_release_name(Type, RunVars) ++ Ext,
@@ -644,7 +664,7 @@ name_param1(Name, {local, Hostname}, _) ->
 %%------------------------------------------------------------------------------
 
 mk_vm_args(Base, Data, VMFile, Args) ->
-    Args2 = [{<<"%PATHS%">>, get_rel_paths(Data)} | Args],
+    Args2 = [{<<"=PATHS=">>, get_rel_paths(Data)} | Args],
     config_from_template("vm.args.src", Base, VMFile, Args2).
 
 get_rel_paths(Vars) ->
@@ -660,8 +680,8 @@ config_from_template(Src, Base, Dest, Args) ->
 
 %%------------------------------------------------------------------------------
 
-create_start_scripts(Rel, Name, Base) ->
-    Path = erl_path(filelib:is_regular(?BUILD_INFO)),
+create_start_scripts(Rel, Name, Base, RunVars) ->
+    Path = erl_path(bld_lib:keyget(is_dev, RunVars)),
     create_start_script(Path, Base, "cmd", Name, "vm.cmd.args", ?CMDSH(Name)),
     create_start_script(Path, Base, Rel, Name, "vm.args", Name ++ ".sh").
 
@@ -892,7 +912,7 @@ convert_join({Remote, Type, Suffix, Module}) ->
 configure_node(ToSetup, SetupCfg, RunVars) ->
     configure_info(ToSetup),
     {_Remote, Module} = InstInfo = install_info(ToSetup),
-    SetupApp = bld_lib:keyget(setup_application, RunVars),
+    SetupApp = bld_lib:get_setup_app(RunVars),
     if SetupApp == undefined orelse Module == undefined ->
             bld_lib:print(skip_msg(SetupApp, Module));
        true ->

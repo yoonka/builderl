@@ -55,6 +55,10 @@
          get_default_joins/1,
          get_allowed/1,
          get_params/1,
+         get_setup_config/1,
+         get_setup_release/1,
+         get_setup_release/2,
+         get_setup_app/1,
          keyget/3,
          keyget/2,
          start_node/2,
@@ -279,6 +283,31 @@ get_params(BldCfg) ->
     Allowed = [atom_to_list(T) || {node_type, T, _, _, _, _} <- BldCfg],
     {ok, SuffixRe} = re:compile(?SUFFIX_RE),
     {Allowed, SuffixRe, BldCfg}.
+
+
+get_setup_config(BldCfg) ->
+    lists:keyfind(setup_config, 1, BldCfg).
+
+
+get_setup_release(BldCfg) ->
+    case get_setup_config(BldCfg) of
+        undefined -> undefined;
+        Tuple -> element(2, Tuple)
+    end.
+
+get_setup_release(BldCfg, Default) ->
+    case get_setup_release(BldCfg) of
+        undefined -> Default;
+        Rel -> Rel
+    end.
+
+
+get_setup_app(BldCfg) ->
+    case get_setup_config(BldCfg) of
+        undefined -> undefined;
+        Tuple -> element(4, Tuple)
+    end.
+
 
 %% Allows List to contain tuples with any amount of terms
 keyget(Key, List, Default) ->

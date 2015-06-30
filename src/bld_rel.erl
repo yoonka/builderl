@@ -47,7 +47,8 @@
 mk_dev() ->
     File = get_reltool_config(),
     BldCfg = get_builderl_config(File),
-    CodePaths = get_code_paths(File),
+    LibDirs = get_lib_dirs(File),
+    CodePaths = code_paths(LibDirs, []),
 
     [process_dev(Config, CodePaths) || {config, _} = Config <- File],
 
@@ -57,7 +58,7 @@ mk_dev() ->
     Vsn = bld_lib:keyget(boot_version, BldCfg),
     write_start_erl_data(ErtsVsn, Vsn),
     write_build_info(Vsn),
-    write_builderl_config(Vsn, BldCfg),
+    write_builderl_config(Vsn, BldCfg, LibDirs),
 
     io:format("Finished.~n", []).
 
@@ -123,15 +124,14 @@ halt_bad_rel_name(Name) ->
     halt(1).
 
 
-get_code_paths(File) ->
+get_lib_dirs(File) ->
     Lists = [proplists:get_value(lib_dirs, Sys, [])
              || {config, {sys, Sys}} <- File],
-    LibDirs = lists:usort(lists:merge(Lists)),
-    list_ebins(LibDirs, []).
+    lists:usort(lists:merge(Lists)).
 
-list_ebins([Dir|T], Acc) ->
-    list_ebins(T, filelib:wildcard(Dir ++ "/*/ebin") ++ Acc);
-list_ebins([], Acc) ->
+code_paths([Dir|T], Acc) ->
+    code_paths(T, filelib:wildcard(Dir ++ "/*/ebin") ++ Acc);
+code_paths([], Acc) ->
     lists:reverse(Acc).
 
 %%------------------------------------------------------------------------------
@@ -226,7 +226,7 @@ inc_get_boot_rel(Sys) ->
 
 write_vm_local_args(CodePaths) ->
     PathsArg = "-pa " ++ string:join(CodePaths, " "),
-    Vars = [{options, [force]}, {<<"%PATHS%">>, PathsArg}],
+    Vars = [{options, [force]}, {<<"=PATHS=">>, PathsArg}],
     bld_lib:process_file(["etc", "vm_local.args.src"], ?LOCAL_VM_ARGS, Vars).
 
 
@@ -245,23 +245,53 @@ write_build_info(Vsn) ->
     ok = file:write_file(?BUILD_INFO, Info).
 
 
-write_builderl_config(RelVsn, Cfg) ->
+write_builderl_config(RelVsn, Cfg, LibDirs) ->
     File = filename:join(["releases", RelVsn, ?BUILDERL_CONFIG]),
     io:format(" => Create file: ~s~n", [File]),
     Terms = proplists:get_value(release_types, Cfg, []),
     Recs = [{node_type, A, B, C, D, E} || {A, B, C, D, E} <- Terms],
-    ToWrite = Recs ++ set_up_cfg(Cfg) ++ def_nodes(Cfg) ++ def_joins(Cfg),
+    SetupCfg = set_up_cfg(Cfg, LibDirs),
+    ToWrite = Recs ++ SetupCfg ++ def_nodes(Cfg) ++ def_joins(Cfg),
     bld_lib:write_terms(File, ToWrite).
 
-set_up_cfg(Cfg) ->
+set_up_cfg(Cfg, LibDirs) ->
     case lists:keyfind(setup_config, 1, Cfg) of
         false ->
             [];
         {setup_config, CmdRel, SetupApp, SetupMod} ->
-            [{cmd_release, CmdRel},
-             {setup_application, SetupApp},
-             {setup_module, SetupMod}]
+            check_setup_mod(SetupApp, SetupMod),
+            {Dir, SetupVsn} = setup_app(LibDirs, SetupApp),
+            [{setup_config, CmdRel, Dir, SetupApp, SetupVsn, SetupMod}]
     end.
+
+
+check_setup_mod(undefined, SetupMod) when SetupMod =/= undefined ->
+    Msg = "Error: setup module requires the setup application to be defined,"
+        ++ "aborting.~n",
+    io:format(Msg),
+    halt(1);
+check_setup_mod(_, _) ->
+    ok.
+
+
+setup_app(_LibDirs, undefined) ->
+    {undefined, undefined};
+setup_app([Dir|T], SetupApp) ->
+    Path = filename:join([Dir, SetupApp, "ebin"]),
+    case filelib:is_dir(Path) of
+        true -> setup_app_found(Dir, Path, SetupApp);
+        false -> setup_app(T, SetupApp)
+    end;
+setup_app([], SetupApp) ->
+    Msg = "Error: setup application '~s' not found, aborting.~n",
+    io:format(Msg, [SetupApp]),
+    halt(1).
+
+setup_app_found(Dir, Path, SetupApp) ->
+    AppFile = filename:join(Path, SetupApp) ++ ".app",
+    [{application, SetupApp, List}] = bld_lib:consult_app_file(AppFile),
+    {Dir, proplists:get_value(vsn, List)}.
+
 
 def_nodes(Cfg) ->
     get_tuple_list(default_nodes, Cfg).
