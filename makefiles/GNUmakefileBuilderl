@@ -39,7 +39,8 @@ ifneq ($(ISBLDERL),0)
 $(info Repository $(BLDERLPATH)/ does not exist, will create)
 ISBLDERL := $(shell mkdir -p $(BLDERLPATH); \
   git clone $(BLDERLURL) 1>&2; echo $$?)
-$(shell ln -sf ../$(BLDERLPATH) bin/builderl)
+$(shell rm -f bin/builderl)
+$(shell ln -s ../$(BLDERLPATH) bin/builderl)
 endif
 
 ifneq ($(ISBLDERL),0)

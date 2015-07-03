@@ -26,7 +26,7 @@
 
 -include_lib("builderl/include/builderl.hrl").
 
--export([do/1]).
+-export([do/1, merge_config/2]).
 
 -define(CMDSH, fun(NodeName) -> NodeName ++ ".cmd.sh" end).
 -define(TIMEOUT, 15000).

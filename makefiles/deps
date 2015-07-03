@@ -41,14 +41,14 @@ deps_vsns_dir = deps-versions
 
 ifndef DEPSVSN
 
-curr_branch = $(shell git rev-parse --abbrev-ref HEAD)
+curr_branch = $(shell git rev-parse --abbrev-ref HEAD 2> /dev/null)
 
 # Include dependencies for the current branch.
 # If they can't be found, use dependencies for 'develop' if the name
 # of the current branch starts with 'develop'. Otherwise always use
 # dependencies for 'master' (default).
 ifeq ($(wildcard $(deps_vsns_dir)/$(curr_branch)),)
-is_develop = $(shell git rev-parse --abbrev-ref HEAD | grep -e ^$(GITDEVELOP))
+is_develop = $(shell git rev-parse --abbrev-ref HEAD 2> /dev/null | grep -e ^$(GITDEVELOP))
 ifeq ($(is_develop),)
 curr_branch = $(GITMASTER)
 else

@@ -56,7 +56,7 @@ a_app_erl_files = $(wildcard $(App_Src_Dir:%=%*.erl))
 a_app_modules = $(notdir $(a_app_erl_files:%.erl=%))
 
 # List all appup files that needs to be copied from src to ebin for each app
-a_appup_srcs = $(shell find lib/*/src/*.appup.src)
+a_appup_srcs = $(shell find lib/*/src/*.appup.src 2> /dev/null)
 AppUp_Names = $(subst /src/,/ebin/,$(a_appup_srcs))
 a_appup_dests = $(AppUp_Names:%.appup.src=%.appup)
 

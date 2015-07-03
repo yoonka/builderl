@@ -51,9 +51,10 @@ p_vsn = $($(p_name)_has_vsn)
 lib/%.app:
 	@rm -f $(DEV_BUILD_DONE)
 	@mkdir -p $(dir $@)
+	sed -e "s|%MODULES%|=MODULES=|g;s|%VSN%|=VSN=|g" < "$^" | \
 	sed -e \
-	  "s|%APP%|$(p_name)|g;s|%MODULES%|$(p_ins_mod)|g;s|%VSN%|$(p_vsn)|g" \
-	  < "$^" > "$@"
+	  "s|=APP=|$(p_name)|g;s|=MODULES=|$(p_ins_mod)|g;s|=VSN=|$(p_vsn)|g" \
+	  > "$@"
 
 lib/%.appup:
 	ln -s ../src/$(notdir $*).appup.src $@
@@ -97,7 +98,7 @@ d_parse_xform_dep = \
 #         relocation of a .erl file. Deleting the .erl.d file is a remedy.
 #
 #         Also related: the .app file of application where the .erl file is
-#         moved to is not regenerated.  This may be due to %MODULES% not
+#         moved to is not regenerated.  This may be due to =MODULES= not
 #         changing, even if a module is added to the application.  Remedy:
 #         Deleting the relevant lib/*/ebin/*.app file will force a rebuild.
 #

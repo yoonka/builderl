@@ -35,19 +35,20 @@
 # Credit for the Erlang downloading tip:
 # https://groups.google.com/forum/?fromgroups=#!topic/erlang-programming/U0JJ3SeUv5Y
 
-## Project-specific variables and settings
+## Project-specific variables and settings (Change where required)
 ##------------------------------------------------------------------------------
-## Tested version known to compile riak_pb properly
+## Tested version known to compile riak_pb
 # REBARURL   ?= https://github.com/yoonka/erlstrap/wiki/rebar
-## Location of the Git repository
-# GITURL     ?= https://github.com/ExampleNotExistentAccount
-## Name of the development branch, uses dependencies specified for this branch
+## Git repository for dependencies listed in files in deps-versions/
+# GITURL     ?= https://github.com/yoonka
+## The development branch, use dependencies from deps-versions/$GITDEVELOP
 ## if the current branch starts with the name of the development branch
 # GITDEVELOP ?= develop
-## Name of the default branch, uses default set of dependencies
+## Name of the default branch, use dependencies from deps-versions/$GITMASTER
 # GITMASTER  ?= master
-## Compilation flags, edit as needed
+## Compilation flags
 # ERLCFLAGS  ?= -W -v -pa deps/lager/ebin +debug_info +'{parse_transform, lager_transform}'
+##------------------------------------------------------------------------------
 
 ## These are defaults used in GNUmakefileBuilderl, change if needed
 ##------------------------------------------------------------------------------
