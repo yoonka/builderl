@@ -33,23 +33,19 @@ CUSTOMMK   ?= GNUmakefileCustom
 #-------------------------------------------------------------------------------
 
 # Pull builderl repository if needed
-BLDISDIFF := $(shell git diff $(BLDERLPATH) 2>&1 | wc -l | tr -d '[[:space:]]')
-ifneq ($(BLDISDIFF),0)
-$(info Repository $(BLDERLPATH)/ not up to date, will try to update)
-ISDIRTY := $(shell git diff $(BLDERLPATH) 2>/dev/null \
-  | grep "\-dirty" | wc -l | tr -d '[[:space:]]')
-ifeq ($(ISDIRTY),0)
-ISBLDERL := $(shell git submodule update --init $(BLDERLPATH) \
-  > /dev/null 2>&1; echo $$?)
+ISBLDERL := $(shell git --git-dir=$(BLDERLPATH)/.git \
+  --work-tree=$(BLDERLPATH)/ status > /dev/null 2>&1; echo $$?)
 ifneq ($(ISBLDERL),0)
-$(error Can not update submodule $(BLDERLPATH))
-endif # ISBLDERL
+$(info Repository $(BLDERLPATH)/ does not exist, will create)
+ISBLDERL := $(shell mkdir -p $(BLDERLPATH); \
+  git clone $(BLDERLURL) 1>&2; echo $$?)
 $(shell rm -f bin/builderl)
 $(shell ln -s ../$(BLDERLPATH) bin/builderl)
-else
-$(warning $(BLDERLPATH)/ contains local changes, not updating!)
-endif # ISDIRTY
-endif # BLDISDIFF
+endif
+
+ifneq ($(ISBLDERL),0)
+$(error Can not pull the repository)
+endif
 
 incs := common rel_app_vars deps targets configs clean debug
 include $(foreach file,$(incs),$(BLDERLPATH)/makefiles/$(file))
