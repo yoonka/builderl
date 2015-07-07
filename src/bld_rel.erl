@@ -104,10 +104,10 @@ get_builderl_config(File) ->
     Config.
 
 get_cmd_rel(Cfg) ->
-    case lists:keyfind(setup_config, 1, Cfg) of
-        false -> [];
-        {setup_config, undefined, _, _} -> [];
-        {setup_config, CmdRel, _, _} -> [CmdRel]
+    case proplists:get_value(setup_config, Cfg) of
+        undefined -> [];
+        {undefined, _, _} -> [];
+        {CmdRel, _, _} -> [CmdRel]
     end.
 
 verify_rel_names(Rels, [N | T]) ->
@@ -250,20 +250,19 @@ write_builderl_config(RelVsn, Cfg, LibDirs) ->
     io:format(" => Create file: ~s~n", [File]),
     Terms = proplists:get_value(release_types, Cfg, []),
     Recs = [{node_type, A, B, C, D, E} || {A, B, C, D, E} <- Terms],
-    SetupCfg = set_up_cfg(Cfg, LibDirs),
+    SetupCfg = setup_cfg(Cfg, LibDirs) ++ get_location(Cfg),
     ToWrite = Recs ++ SetupCfg ++ def_nodes(Cfg) ++ def_joins(Cfg),
     bld_lib:write_terms(File, ToWrite).
 
-set_up_cfg(Cfg, LibDirs) ->
-    case lists:keyfind(setup_config, 1, Cfg) of
-        false ->
+setup_cfg(Cfg, LibDirs) ->
+    case proplists:get_value(setup_config, Cfg) of
+        undefined ->
             [];
-        {setup_config, CmdRel, SetupApp, SetupMod} ->
+        {CmdRel, SetupApp, SetupMod} ->
             check_setup_mod(SetupApp, SetupMod),
             {Dir, SetupVsn} = setup_app(LibDirs, SetupApp),
             [{setup_config, CmdRel, Dir, SetupApp, SetupVsn, SetupMod}]
     end.
-
 
 check_setup_mod(undefined, SetupMod) when SetupMod =/= undefined ->
     Msg = "Error: setup module requires the setup application to be defined,"
@@ -272,6 +271,12 @@ check_setup_mod(undefined, SetupMod) when SetupMod =/= undefined ->
     halt(1);
 check_setup_mod(_, _) ->
     ok.
+
+get_location(Cfg) ->
+    case lists:keyfind(install_location, 1, Cfg) of
+        false -> [];
+        Tuple -> [Tuple]
+    end.
 
 
 setup_app(_LibDirs, undefined) ->
