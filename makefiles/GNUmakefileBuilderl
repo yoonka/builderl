@@ -33,8 +33,10 @@ CUSTOMMK   ?= GNUmakefileCustom
 #-------------------------------------------------------------------------------
 
 # Pull builderl repository if needed
+ISBLDERL := $(shell git --git-dir=$(BLDERLPATH)/.git \
+  --work-tree=$(BLDERLPATH)/ status > /dev/null 2>&1; echo $$?)
 BLDISDIFF := $(shell git diff $(BLDERLPATH) 2>&1 | wc -l | tr -d '[[:space:]]')
-ifneq ($(BLDISDIFF),0)
+ifneq ($(ISBLDERL)-$(BLDISDIFF),0-0)
 $(info Repository $(BLDERLPATH)/ not up to date, will try to update)
 ISDIRTY := $(shell git diff $(BLDERLPATH) 2>/dev/null \
   | grep "\-dirty" | wc -l | tr -d '[[:space:]]')
