@@ -69,7 +69,7 @@ rel_files: run_reltool
 	cp $(erts_files) $(REL_PATH)/$(ERTS_BIN)
 	cp $(bin_files) $(REL_PATH)/bin
 	mkdir $(REL_PATH)/etc
-	cp etc/*.src etc/init.conf $(REL_PATH)/etc
+	cp etc/*.src etc/init.conf $(REL_PATH)/etc || true
 	cp bin/*.esh $(REL_PATH)/bin
 	cp -r etc/init.d $(REL_PATH)/etc
 
