@@ -98,8 +98,7 @@ do_start({_, _, BldCfg}, OldOpts) ->
                || {node, start, T, S, Dir} <- OldOpts],
     io:format("Using options: ~p~n", [Options]),
     io:format(standard_io, "~n => Starting nodes...~n~n", []),
-    CmdFun = fun(Name) -> Name ++ ".sh" end,
-    lists:foreach(fun(Node) -> bld_lib:start_node(Node, CmdFun) end, Options),
+    lists:foreach(fun(Node) -> bld_lib:start_node(Node, ".sh") end, Options),
     io:format("Finished.~n").
 
 %%------------------------------------------------------------------------------

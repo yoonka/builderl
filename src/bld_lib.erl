@@ -32,6 +32,7 @@
          add_node/4,
          extract_node/2,
          node_dir/3,
+         node_name/2,
          node_name/3,
          start_erl_data/0,
          consult_app_file/1,
@@ -47,18 +48,10 @@
          get_rel_dir/0,
          read_builderl_config/0,
          read_builderl_config/1,
-         get_release_name/2,
-         get_node_name/2,
-         get_config_module/2,
-         get_port_offset/2,
          get_default_nodes/1,
          get_default_joins/1,
          get_allowed/1,
          get_params/1,
-         get_setup_config/1,
-         get_setup_release/1,
-         get_setup_release/2,
-         get_setup_app/1,
          keyget/3,
          keyget/2,
          start_node/2,
@@ -144,13 +137,36 @@ extract_node(Text, {Allowed, SuffixRe, _}) ->
     {list_to_existing_atom(Node), Suffix}.
 
 
-node_dir(Type, Suffix, BldCfg) ->
-    "../" ++ node_name(Type, Suffix, BldCfg).
+node_dir(Node, Suffix, BldCfg) ->
+    Path = process_location(proplists:get_value(install_location, BldCfg), []),
+    Path ++ node_name(Node, Suffix, BldCfg).
+
+process_location(undefined, _) ->
+    "../";
+process_location([home|T], Acc) ->
+    {ok, [[Home]]} = init:get_argument(home),
+    process_location(T, [Home | Acc]);
+process_location([Elem|T], Acc) when is_list(Elem) ->
+    process_location(T, [Elem | Acc]);
+process_location([], Acc) ->
+    filename:join(Acc).
 
 
 node_name(Type, Suffix, BldCfg) when is_atom(Type) ->
-    node_name(get_node_name(Type, BldCfg), Suffix, BldCfg);
+    node_name(get_node_name(Type, BldCfg), Suffix);
 node_name(Name, Suffix, _BldCfg) ->
+    node_name(Name, Suffix).
+
+get_node_name(Type, [{node_type, Type, _, Name, _, _}|_]) -> Name;
+get_node_name(Type, [_|T]) -> get_node_name(Type, T);
+get_node_name(Type, []) -> halt_bad_node_type(Type).
+
+halt_bad_node_type(Type) ->
+    io:format("Unknown node type '~p', aborting.~n", [Type]),
+    halt(1).
+
+
+node_name(Name, Suffix) ->
     if Suffix == [] -> Name;
        true -> Name ++ "-" ++ Suffix end.
 
@@ -237,36 +253,6 @@ read_builderl_config(RelDir) ->
     end.
 
 
-get_release_name(Type, BldCfg) ->
-    element(3, get_node_type(Type, BldCfg)).
-
-
-get_node_name(Type, BldCfg) ->
-    element(4, get_node_type(Type, BldCfg)).
-
-
-get_config_module(Type, BldCfg) ->
-    element(5, get_node_type(Type, BldCfg)).
-
-
-%% Constant offset to add to the port number to ensure ports are unique.
-%% When installing more nodes of the same type the port number
-%% is the offset plus the sequential number starting from 0 for the given type
-%% and in the order in which nodes were specified in the command line.
-%% Increase the gap if installing more than 10 nodes of the same type.
-get_port_offset(Type, BldCfg) ->
-    element(6, get_node_type(Type, BldCfg)).
-
-
-get_node_type(Type, [{node_type, Type, _, _, _, _} = Node|_]) -> Node;
-get_node_type(Type, [_|T]) -> get_node_type(Type, T);
-get_node_type(Type, []) -> halt_bad_node_type(Type).
-
-halt_bad_node_type(Type) ->
-    io:format("Unknown node type '~p', aborting.", [Type]),
-    halt(1).
-
-
 get_default_nodes(BldCfg) ->
     keyget(default_nodes, BldCfg, []).
 
@@ -280,40 +266,15 @@ get_allowed(BldCfg) ->
 
 
 get_params(BldCfg) ->
-    Allowed = [atom_to_list(T) || {node_type, T, _, _, _, _} <- BldCfg],
     {ok, SuffixRe} = re:compile(?SUFFIX_RE),
-    {Allowed, SuffixRe, BldCfg}.
+    {get_allowed(BldCfg), SuffixRe, BldCfg}.
 
 
-get_setup_config(BldCfg) ->
-    lists:keyfind(setup_config, 1, BldCfg).
-
-
-get_setup_release(BldCfg) ->
-    case get_setup_config(BldCfg) of
-        undefined -> undefined;
-        Tuple -> element(2, Tuple)
-    end.
-
-get_setup_release(BldCfg, Default) ->
-    case get_setup_release(BldCfg) of
-        undefined -> Default;
-        Rel -> Rel
-    end.
-
-
-get_setup_app(BldCfg) ->
-    case get_setup_config(BldCfg) of
-        undefined -> undefined;
-        Tuple -> element(4, Tuple)
-    end.
-
-
-%% Allows List to contain tuples with any amount of terms
+%% The builderl config list is not a property list
 keyget(Key, List, Default) ->
     case lists:keyfind(Key, 1, List) of
         false -> Default;
-        Tuple -> element(2, Tuple)
+        {Key, Value} -> Value
     end.
 
 keyget(Key, List) ->
@@ -321,8 +282,8 @@ keyget(Key, List) ->
 
 %%------------------------------------------------------------------------------
 
-start_node({Name, Base}, CmdFun) ->
-    Cmd = filename:join([Base, "bin", CmdFun(Name)]),
+start_node({Name, Base}, Suffix) ->
+    Cmd = filename:join([Base, "bin", Name ++ Suffix]),
     io:format(standard_io, "Executing '~s'.~n", [Cmd]),
     Res = os:cmd(Cmd),
     io:format("Result: ~p~n~n", [Res]).

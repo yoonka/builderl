@@ -26,9 +26,8 @@
 
 -include_lib("builderl/include/builderl.hrl").
 
--export([do/1, merge_config/2]).
+-export([do/1, merge_config/2, load_config/1]).
 
--define(CMDSH, fun(NodeName) -> NodeName ++ ".cmd.sh" end).
 -define(TIMEOUT, 15000).
 
 %% Folder that can be used to load patches to the running system.
@@ -51,6 +50,8 @@
          <<"log">>,
          <<"sasl_logfiles">>,
          <<"shell">>]).
+
+-define(DEFAULT_CONF, "local_setup.conf").
 
 usage(DefNodes, DefJoins, Allowed) ->
     [
@@ -158,19 +159,21 @@ usage(DefNodes, DefJoins, Allowed) ->
 
 do(Args) ->
     check_release(),
-    RunVars = runtime_variables(),
-    do1(Args, RunVars).
+    {_, Vsn} = StartErl = bld_lib:start_erl_data(),
+    RelDir = filename:join("releases", Vsn),
+    BldConf = bld_lib:read_builderl_config(RelDir),
+    do1(Args, [{start_erl, StartErl}, {rel_dir, RelDir} | BldConf]).
 
-do1(["-h"], RunVars) ->     print_usage(RunVars);
-do1(["--help"], RunVars) -> print_usage(RunVars);
-do1(Other, RunVars) ->      do2(Other, RunVars).
+do1(["-h"], BldConf) ->     print_usage(BldConf);
+do1(["--help"], BldConf) -> print_usage(BldConf);
+do1(Other, BldConf) ->      do2(Other, BldConf).
 
-print_usage(RunVars) ->
-    DefNodes = bld_lib:get_default_nodes(RunVars),
-    DefJoins = bld_lib:get_default_joins(RunVars),
+print_usage(BldConf) ->
+    DefNodes = bld_lib:get_default_nodes(BldConf),
+    DefJoins = bld_lib:get_default_joins(BldConf),
     Nodes = ["-i " | string:join(DefNodes, " -i ")],
     Joins = string:join(joins_to_str(DefJoins, ""), " "),
-    Allowed = bld_lib:get_allowed(RunVars),
+    Allowed = bld_lib:get_allowed(BldConf),
     bld_lib:print(usage(Nodes, Joins, Allowed)).
 
 joins_to_str([{join, List} | T], Acc) ->
@@ -183,10 +186,10 @@ joins_to_str([{Node, Suffix} | T], Acc) ->
 joins_to_str([], Acc) ->
     lists:reverse(Acc).
 
-do2(Other, RunVars) ->
-    Params = bld_lib:get_params(RunVars),
+do2(Other, BldConf) ->
+    Params = bld_lib:get_params(BldConf),
     Options = parse(Other, Params),
-    kick_off(Params, Options).
+    kick_off(runtime_variables(BldConf), Options).
 
 check_release() ->
     Fun = fun({dir, Dir}) -> filelib:is_dir(Dir);
@@ -205,35 +208,6 @@ err1() ->
      "this script from the root of the folder containing the release.",
      "Use -h or --help for more options."
     ].
-
-runtime_variables() ->
-    {_, Vsn} = StartErl = bld_lib:start_erl_data(),
-    RelDir = filename:join("releases", Vsn),
-    Hostname = hostname(),
-    BldConf = bld_lib:read_builderl_config(RelDir),
-    Vars = [
-            {start_erl, StartErl},
-            {rel_dir, RelDir},
-            {hostname, Hostname},
-            {is_dev, filelib:is_regular(?BUILD_INFO)}
-           ] ++ BldConf,
-    io:format("Using runtime variables:~n~p~n", [Vars]),
-    Vars.
-
-hostname() ->
-    {ok, Hostname} = inet:gethostname(),
-    {ok, {hostent, Fqdn, _, _, _, _}} = inet:gethostbyname(Hostname),
-    case is_fqdn(Hostname, Fqdn, string:chr(Fqdn, $.)) of
-        false -> {local, Hostname};
-        true -> {fqdn, Fqdn}
-    end.
-
-is_fqdn(_Host, _Fqdn, 0) -> false;
-is_fqdn(_, undefined, _) -> false;
-is_fqdn(Host, Fqdn, Idx) -> is_fqdn(Host, string:sub_string(Fqdn, 1, Idx - 1)).
-
-is_fqdn(Hostname, Hostname) -> true;
-is_fqdn(_, _) -> false.
 
 %%------------------------------------------------------------------------------
 
@@ -310,9 +284,81 @@ add_seq(_P, [], NewOptions, _Counters) ->
 
 %%------------------------------------------------------------------------------
 
-kick_off({_, _, RunVars}, Options) ->
+runtime_variables(BldCfg) ->
+    StartErl = {start_erl, _} = lists:keyfind(start_erl, 1, BldCfg),
+    RelDir = {rel_dir, _} = lists:keyfind(rel_dir, 1, BldCfg),
+    HostName = {hostname, hostname()},
+    IsDevT = {is_dev, IsDev = filelib:is_regular(?BUILD_INFO)},
+    SetupCfg = setup_config(IsDev, lists:keyfind(setup_config, 1, BldCfg)),
+    Nodes = [{{node, T}, {R, N, M, O}} || {node_type, T, R, N, M, O} <- BldCfg],
+    Vars = [StartErl, RelDir, HostName, IsDevT] ++ SetupCfg ++ Nodes,
+    io:format("Using runtime variables:~n~p~n", [Vars]),
+    Vars.
+
+get_release_name(Type, RunVars) ->
+    element(1, proplists:get_value({node, Type}, RunVars)).
+
+get_node_name(Type, RunVars) ->
+    element(2, proplists:get_value({node, Type}, RunVars)).
+
+get_node_name(Type, Suffix, RunVars) ->
+    bld_lib:node_name(get_node_name(Type, RunVars), Suffix).
+
+get_config_module(Type, RunVars) ->
+    element(3, proplists:get_value({node, Type}, RunVars)).
+
+%% Constant offset to add to the port number to ensure ports are unique.
+%% When installing more nodes of the same type the port number
+%% is the offset plus the sequential number starting from 0 for the given type
+%% and in the order in which nodes were specified in the command line.
+%% Increase the gap if installing more than 10 nodes of the same type.
+get_port_offset(Type, RunVars) ->
+    element(4, proplists:get_value({node, Type}, RunVars)).
+
+setup_config(_IsDev, false) ->
+    [];
+setup_config(IsDev, {setup_config, Rel, Dir, App, Vsn, Mod}) ->
+    Cfg = add_setup_app(add_setup_rel(Rel), App),
+    add_setup_module(Cfg, IsDev, Dir, App, Vsn, Mod).
+
+add_setup_rel(undefined) -> [];
+add_setup_rel(Rel) -> [{setup_release, Rel}].
+
+add_setup_app(L, undefined) -> L;
+add_setup_app(L, App) -> [{setup_app, App} | L].
+
+add_setup_module(L, _IsDev, _Dir, App, _Vsn, Mod)
+  when App == undefined orelse Mod == undefined -> L;
+add_setup_module(L, IsDev, Dir, App, Vsn, Mod) ->
+    Path = setup_path(IsDev, Dir, App, Vsn),
+    code:add_path(Path),
+    [{setup_module, Mod} | L].
+
+setup_path(true, Dir, App, _Vsn) ->
+    filename:join([Dir, App, "ebin"]);
+setup_path(false, _Dir, App, Vsn) ->
+    filename:join(["lib", atom_to_list(App) ++ "-" ++ Vsn, "ebin"]).
+
+hostname() ->
+    {ok, Hostname} = inet:gethostname(),
+    {ok, {hostent, Fqdn, _, _, _, _}} = inet:gethostbyname(Hostname),
+    case is_fqdn(Hostname, Fqdn, string:chr(Fqdn, $.)) of
+        false -> {local, Hostname};
+        true -> {fqdn, Fqdn}
+    end.
+
+is_fqdn(_Host, _Fqdn, 0) -> false;
+is_fqdn(_, undefined, _) -> false;
+is_fqdn(Host, Fqdn, Idx) -> is_fqdn(Host, string:sub_string(Fqdn, 1, Idx - 1)).
+
+is_fqdn(Hostname, Hostname) -> true;
+is_fqdn(_, _) -> false.
+
+%%------------------------------------------------------------------------------
+
+kick_off(RunVars, Options) ->
     Nodes = [{A, T, S, Seq, D} || {node, A, T, S, Seq, D} <- Options],
-    Names = [{bld_lib:node_name(T, S, RunVars), Dir}
+    Names = [{get_node_name(T, S, RunVars), Dir}
              || {_A, T, S, _Seq, Dir} <- Nodes],
     Clusters = [J || {join, J} <- Options],
     check_joins(Clusters, Options),
@@ -329,12 +375,12 @@ kick_off({_, _, RunVars}, Options) ->
     FolderFun = fun({_N, Dir}) -> check_folder(Dir, Delete) end,
     lists:foreach(FolderFun, Names),
 
-    SetupMod = get_setup_module(RunVars),
+    SetupMod = proplists:get_value(setup_module, RunVars, undefined),
     io:format(standard_io, "~n => Setting up nodes...~n", []),
     Fun = fun(Opt) -> do_install(Opt, SetupMod, InitConf, RunVars) end,
     lists:foreach(Fun, Nodes),
 
-    start_nodes(Names),
+    start_nodes(Names, RunVars),
     Connected = wait_for_nodes(Nodes),
 
     Joins = lists:usort(lists:flatten(Clusters)),
@@ -506,25 +552,6 @@ err2(Name) ->
      "Use -h or --help for more options."
     ].
 
-
-get_setup_module(RunVars) ->
-    case bld_lib:get_setup_config(RunVars) of
-        undefined -> undefined;
-        Tuple -> get_setup_mod(bld_lib:keyget(is_dev, RunVars), Tuple)
-    end.
-
-get_setup_mod(_, {setup_config, _CmdRel, _Dir, SetupApp, _SetupVsn, SetupMod})
-  when SetupApp == undefined orelse SetupMod == undefined -> undefined;
-get_setup_mod(IsDev, {setup_config, _, Dir, SetupApp, SetupVsn, SetupMod}) ->
-    Path = setup_path(IsDev, Dir, SetupApp, SetupVsn),
-    code:add_path(Path),
-    SetupMod.
-
-setup_path(true, Dir, SetupApp, _SetupVsn) ->
-    filename:join([Dir, SetupApp, "ebin"]);
-setup_path(false, _Dir, SetupApp, SetupVsn) ->
-    filename:join(["lib", atom_to_list(SetupApp) ++ "-" ++ SetupVsn, "ebin"]).
-
 %%------------------------------------------------------------------------------
 
 do_install({_Action, Type, Suffix, Seq, Base}, SetupMod, InitConf, RunVars) ->
@@ -533,9 +560,21 @@ do_install({_Action, Type, Suffix, Seq, Base}, SetupMod, InitConf, RunVars) ->
     bld_lib:mk_dir(Base),
     do_subfolders(SetupMod, Base),
     Cookie = install_cookie(Type, Base, RunVars),
-    Offset = bld_lib:get_port_offset(Type, RunVars) + Seq,
-    create_node_configs(
-      SetupMod, Type, Base, Suffix, Cookie, Offset, InitConf, RunVars).
+    Offset = get_port_offset(Type, RunVars) + Seq,
+    Name = get_node_name(Type, Suffix, RunVars),
+    KeyReplace = get_key_replace(SetupMod, Base, Name, Offset, RunVars),
+    CfgArgs = create_args(Name, Cookie, KeyReplace, InitConf, RunVars),
+
+    RelDir = proplists:get_value(rel_dir, RunVars),
+    ConfigSrc = filename:join("etc", "sys.config.src"),
+    ConfigDest = filename:join(RelDir, Name ++ ".config"),
+    bld_lib:process_file(ConfigSrc, ConfigDest, CfgArgs, [force]),
+
+    Privs = process_data_file(RelDir, Base, Type, Name, RunVars, CfgArgs),
+    process_app_configs(SetupMod, Privs, Base, CfgArgs),
+
+    {ErtsVsn, _Vsn} = proplists:get_value(start_erl, RunVars),
+    node_package_setup(ErtsVsn, Base, CfgArgs).
 
 do_subfolders(SetupMod, Base) ->
     Msg = "Creating subfolders in '" ++ Base ++ "'...~n",
@@ -552,58 +591,10 @@ get_subfolders(Mod) ->
 
 install_cookie(Type, Base, RunVars) ->
     File = filename:join(Base, ".erlang.cookie"),
-    Cookie = bld_lib:get_node_name(Type, RunVars) ++ "_cookie",
+    Cookie = get_node_name(Type, RunVars) ++ "_cookie",
     io:format(standard_io, "Write cookie '~s': ", [File]),
     bld_lib:check_file_op(file:write_file(File, Cookie ++ "\n")),
     Cookie.
-
-%%------------------------------------------------------------------------------
-
-create_node_configs(
-  SetupMod, Type, Base, Suffix, Cookie, Offset, InitConf, RunVars) ->
-    {ErtsVsn, _Vsn} = proplists:get_value(start_erl, RunVars),
-    RelDir = proplists:get_value(rel_dir, RunVars),
-    Data = get_rel_data(RelDir, Type, RunVars),
-    CmdData = get_rel_data(RelDir, cmd, RunVars),
-    Name = bld_lib:node_name(Type, Suffix, RunVars),
-
-    KeyReplace = get_key_replace(SetupMod, Base, Name, Offset, RunVars),
-    CfgArgs = create_args(Name, Cookie, KeyReplace, InitConf, RunVars),
-
-    mk_vm_args(Base, Data, "vm.args", CfgArgs),
-    mk_vm_args(Base, CmdData, "vm.cmd.args", CfgArgs),
-
-    RelName = bld_lib:get_release_name(Type, RunVars),
-
-    ConfigSrc = filename:join("etc", "sys.config.src"),
-    ConfigDest = filename:join(RelDir, Name ++ ".config"),
-    bld_lib:process_file(ConfigSrc, ConfigDest, CfgArgs, [force]),
-
-    create_start_scripts(RelName, Name, Base, RunVars),
-    node_package_setup(ErtsVsn, Base, CfgArgs),
-
-    LibDirs = proplists:get_value(lib_dirs, Data, ["lib"]),
-    Privs = get_priv_dirs(RelDir, Type, LibDirs, RunVars),
-    process_app_configs(SetupMod, Privs, Base, CfgArgs).
-
-
-%% The *.data file is only present in the development environment where
-%% it contains configuration used when creating configuration files needed
-%% to boot releases without actually creating them. When the script
-%% is run in a proper OTP release, where this file is not present, it simply
-%% assumes OTP-compliant defaults.
-get_rel_data(RelDir, Type, RunVars) ->
-    case file:consult(rel_path(RelDir, Type, ".data", RunVars)) of
-        {ok, Vars} -> Vars;
-        {error, _} -> []
-    end.
-
-rel_path(RelDir, cmd, Ext, RunVars) ->
-    Name = bld_lib:get_setup_release(RunVars, "cmd") ++ Ext,
-    filename:join(RelDir, Name);
-rel_path(RelDir, Type, Ext, RunVars) ->
-    Name = bld_lib:get_release_name(Type, RunVars) ++ Ext,
-    filename:join(RelDir, Name).
 
 
 get_key_replace(undefined, _Base, _Name, _Offset, _RunVars) ->
@@ -663,6 +654,56 @@ name_param1(Name, {local, Hostname}, _) ->
 
 %%------------------------------------------------------------------------------
 
+process_data_file(RelDir, Base, Type, Name, RunVars, CfgArgs) ->
+    RelName = get_release_name(Type, RunVars),
+    Path = erl_path(proplists:get_value(is_dev, RunVars)),
+    StartFile = Name ++ start_file_ext(),
+    create_start_script(Path, Base, RelName, Name, "vm.args", StartFile),
+
+    Data = get_rel_data(RelDir, RelName ++ ".data"),
+    mk_vm_args(Base, Data, "vm.args", CfgArgs),
+
+    case proplists:get_value(setup_release, RunVars) of
+        undefined -> ok;
+        CmdRel -> install_cmd_scripts(RelDir, Path, Base, CmdRel, Name, CfgArgs)
+    end,
+    LibDirs = proplists:get_value(lib_dirs, Data, ["lib"]),
+    get_priv_dirs(RelDir, RelName, LibDirs).
+
+%% ?BUILD_INFO is created by mk_dev.esh and only present in the dev environment
+erl_path(true) -> "";
+erl_path(false) -> "./bin/".
+
+create_start_script(Path, Base, Rel, CfgRel, ArgsFile, StartFile) ->
+    Bytes = cmd_sh(Path, Base, Rel, CfgRel, ArgsFile),
+    File = filename:join([Base, "bin", StartFile]),
+
+    io:format(standard_io, "Write start script '~s': ", [File]),
+    bld_lib:check_file_op(file:write_file(File, Bytes)),
+    bld_lib:chmod_exe(File).
+
+cmd_sh(Path, Base, Rel, CfgRel, ArgsFile) ->
+    [
+     "#!/bin/sh\n",
+     "START_ERL=`cat releases/start_erl.data`\n",
+     "APP_VSN=${START_ERL#* }\n",
+     Path ++ "run_erl -daemon " ++ Base ++ "/shell/ " ++ Base ++ "/log \"exec ",
+     Path ++ "erl " ++ Base ++ " releases releases/start_erl.data -config ",
+     "releases/$APP_VSN/" ++ CfgRel ++ ".config -args_file " ++ Base ++ "/etc/",
+     ArgsFile ++ " -boot releases/$APP_VSN/" ++ Rel ++ "\"\n"
+    ].
+
+%% The *.data file is only present in the development environment where
+%% it contains data used when creating configuration files needed
+%% to boot releases without actually creating them. When the script
+%% is run in a proper OTP release, where this file is not present, it simply
+%% assumes OTP-compliant defaults.
+get_rel_data(RelDir, DataFile) ->
+    case file:consult(filename:join(RelDir, DataFile)) of
+        {ok, Vars} -> Vars;
+        {error, _} -> []
+    end.
+
 mk_vm_args(Base, Data, VMFile, Args) ->
     Args2 = [{<<"=PATHS=">>, get_rel_paths(Data)} | Args],
     config_from_template("vm.args.src", Base, VMFile, Args2).
@@ -678,59 +719,27 @@ config_from_template(Src, Base, Dest, Args) ->
     DestFile = filename:join([Base, "etc", Dest]),
     bld_lib:process_file(SrcFile, DestFile, Args).
 
-%%------------------------------------------------------------------------------
+install_cmd_scripts(RelDir, Path, Base, CmdRel, Name, CfgArgs) ->
+    VmArgs = "vm." ++ CmdRel ++ ".args",
+    StartFile = Name ++ start_file_ext(CmdRel),
+    create_start_script(Path, Base, CmdRel, Name, VmArgs, StartFile),
+    CmdData = get_rel_data(RelDir, CmdRel ++ ".data"),
+    mk_vm_args(Base, CmdData, VmArgs, CfgArgs).
 
-create_start_scripts(Rel, Name, Base, RunVars) ->
-    Path = erl_path(bld_lib:keyget(is_dev, RunVars)),
-    create_start_script(Path, Base, "cmd", Name, "vm.cmd.args", ?CMDSH(Name)),
-    create_start_script(Path, Base, Rel, Name, "vm.args", Name ++ ".sh").
+start_file_ext() -> ".sh".
 
-create_start_script(Path, Base, Rel, CfgRel, ArgsFile, StartFile) ->
-    Bytes = cmd_sh(Path, Base, Rel, CfgRel, ArgsFile),
-    File = filename:join([Base, "bin", StartFile]),
-
-    io:format(standard_io, "Write start script '~s': ", [File]),
-    bld_lib:check_file_op(file:write_file(File, Bytes)),
-    bld_lib:chmod_exe(File).
-
-%% ?BUILD_INFO is created by mk_dev.esh and only present in the dev environment
-erl_path(true) -> "";
-erl_path(false) -> "./bin/".
-
-cmd_sh(Path, Base, Rel, CfgRel, ArgsFile) ->
-    [
-     "#!/bin/sh\n",
-     "START_ERL=`cat releases/start_erl.data`\n",
-     "APP_VSN=${START_ERL#* }\n",
-     Path ++ "run_erl -daemon " ++ Base ++ "/shell/ " ++ Base ++ "/log \"exec ",
-     Path ++ "erl " ++ Base ++ " releases releases/start_erl.data -config ",
-     "releases/$APP_VSN/" ++ CfgRel ++ ".config -args_file " ++ Base ++ "/etc/",
-     ArgsFile ++ " -boot releases/$APP_VSN/" ++ Rel ++ "\"\n"
-    ].
-
-
-node_package_setup(ErtsVsn, Base, Args) ->
-    SrcDir = filename:join("erts-" ++ ErtsVsn, "bin"),
-
-    RunnerDst = filename:join([Base, "bin", "runner.src"]),
-    bld_lib:process_file(filename:join(SrcDir, "runner"), RunnerDst, []),
-
-    EnvDst = filename:join([Base, "bin", "env.sh.src"]),
-    bld_lib:process_file(filename:join(SrcDir, "env.sh"), EnvDst, Args),
-
-    SrvDst = filename:join([Base, "etc", "init.d", "daemon.src"]),
-    SrvSrc = filename:join(["etc", "init.d", "daemon.src"]),
-    bld_lib:process_file(SrvSrc, SrvDst, Args).
+start_file_ext(undefined) -> start_file_ext();
+start_file_ext(CmdRel) -> "." ++ CmdRel ++ ".sh".
 
 %%------------------------------------------------------------------------------
 
-get_priv_dirs(RelDir, Type, LibDirs, RunVars) ->
-    [{release, _, _, OldApps}] = get_rel_spec(RelDir, Type, RunVars),
+get_priv_dirs(RelDir, RelName, LibDirs) ->
+    [{release, _, _, OldApps}] = get_rel_spec(RelDir, RelName),
     Apps = [app_folder(X) || X <- OldApps],
     bld_compat:filtermap(fun(X) -> get_priv_dir(LibDirs, X) end, Apps).
 
-get_rel_spec(RelDir, Type, RunVars) ->
-    File = rel_path(RelDir, Type, ".rel", RunVars),
+get_rel_spec(RelDir, RelName) ->
+    File = filename:join(RelDir, RelName ++ ".rel"),
     io:format(standard_io, "Read the release file '~s': ", [File]),
     case file:consult(File) of
         {ok, Vars} ->
@@ -792,11 +801,26 @@ process_priv_file(PrivDir, File, CfgDir, CfgArgs) ->
         true -> bld_lib:process_file(Config, [CfgDir, File], CfgArgs)
     end.
 
+
+node_package_setup(ErtsVsn, Base, Args) ->
+    SrcDir = filename:join("erts-" ++ ErtsVsn, "bin"),
+
+    RunnerDst = filename:join([Base, "bin", "runner.src"]),
+    bld_lib:process_file(filename:join(SrcDir, "runner"), RunnerDst, []),
+
+    EnvDst = filename:join([Base, "bin", "env.sh.src"]),
+    bld_lib:process_file(filename:join(SrcDir, "env.sh"), EnvDst, Args),
+
+    SrvDst = filename:join([Base, "etc", "init.d", "daemon.src"]),
+    SrvSrc = filename:join(["etc", "init.d", "daemon.src"]),
+    bld_lib:process_file(SrvSrc, SrvDst, Args).
+
 %%------------------------------------------------------------------------------
 
-start_nodes(Names) ->
+start_nodes(Names, RunVars) ->
+    StartExt = start_file_ext(proplists:get_value(setup_release, RunVars)),
     io:format(standard_io, "~n => Starting nodes...~n~n", []),
-    lists:foreach(fun(Node) -> bld_lib:start_node(Node, ?CMDSH) end, Names).
+    lists:foreach(fun(Node) -> bld_lib:start_node(Node, StartExt) end, Names).
 
 
 stop_nodes(Names) ->
@@ -866,16 +890,22 @@ connect_to_started(Added) ->
 
 install_known([], _Names, _Clusters, _Known, _InitConf, _RunVars) ->
     ok;
-install_known(Installs, Names, Clusters, Known, InitConf, RunVars) ->
+install_known(Installs, Names, OldClusters, Known, InitConf, RunVars) ->
     io:format(standard_io, "~n => Installing nodes...~n", []),
 
-    AddMod = fun({R, T, S}) ->
-                     {R, T, S, bld_lib:get_config_module(T, RunVars)}
-             end,
-    Running = lists:zip(Names, read_cookies(Names)),
-    SetupCfg = [{running_nodes, Running} | InitConf],
+    AddMod = fun({R, T, S}) -> {R, T, S, get_config_module(T, RunVars)} end,
     AllToSetup = [AddMod(X) || X <- Installs],
-    configure_nodes(AllToSetup, Clusters, Known, SetupCfg, RunVars),
+    FilterFun = fun({_R, T, S, _M}) -> not lists:member({T, S}, Known) end,
+    NotInJoins = lists:filter(FilterFun, AllToSetup),
+    Converted = [convert_join(X) || X <- NotInJoins],
+    Clusters = [ [convert_join(N, AllToSetup) || N <- C] || C <- OldClusters],
+    ToSetup = Converted ++ Clusters,
+
+    io:format(standard_io, "~nClusters:~n~p~n", [ToSetup]),
+    Running = lists:zip(Names, read_cookies(Names)),
+    SetupApp = proplists:get_value(setup_app, RunVars, undefined),
+    SetupCfg = [{running_nodes, Running} | InitConf],
+    lists:foreach(fun(X) -> configure_node(X, SetupApp, SetupCfg) end, ToSetup),
 
     stop_nodes(Installs).
 
@@ -889,16 +919,6 @@ read_cookies(Names) ->
             halt(1)
     end.
 
-configure_nodes(AllToSetup, OldClusters, Known, SetupCfg, RunVars) ->
-    FilterFun = fun({_R, T, S, _M}) -> not lists:member({T, S}, Known) end,
-    NotInJoins = lists:filter(FilterFun, AllToSetup),
-    Converted = [convert_join(X) || X <- NotInJoins],
-    Clusters = [ [convert_join(N, AllToSetup) || N <- C] || C <- OldClusters],
-    ToSetup = Converted ++ Clusters,
-
-    io:format(standard_io, "~nClusters:~n~p~n", [ToSetup]),
-    lists:foreach(fun(X) -> configure_node(X, SetupCfg, RunVars) end, ToSetup).
-
 convert_join({Type, Suffix}, [{_Remote, Type, Suffix, _Module} = H | _T]) ->
     convert_join(H);
 convert_join({_Type, _Suffix} = N, [_ | T]) ->
@@ -909,14 +929,14 @@ convert_join(Remote, _AllToSetup) when is_atom(Remote) ->
 convert_join({Remote, Type, Suffix, Module}) ->
     {list_to_atom(type_suffix(Type, Suffix)), Type, Remote, Module}.
 
-configure_node(ToSetup, SetupCfg, RunVars) ->
+configure_node(ToSetup, SetupApp, SetupCfg) ->
     configure_info(ToSetup),
     {_Remote, Module} = InstInfo = install_info(ToSetup),
-    SetupApp = bld_lib:get_setup_app(RunVars),
     if SetupApp == undefined orelse Module == undefined ->
             bld_lib:print(skip_msg(SetupApp, Module));
        true ->
-            configure_node1(ToSetup, InstInfo, SetupApp, SetupCfg)
+            NewSetupCfg = [{setup_app, SetupApp} | SetupCfg],
+            configure_node1(ToSetup, InstInfo, SetupApp, NewSetupCfg)
     end.
 
 configure_info({Id, _Type, _Remote, _Module}) ->
@@ -964,3 +984,16 @@ configure_node1(Cluster, {Remote, Module}, SetupApp, SetupCfg) ->
     Args = [{Id, R} || {Id, _Type, R, _Module} <- Cluster],
     ok = rpc:call(Remote, Module, install, [Args, SetupCfg]),
     io:format(standard_io, "Done.~n", []).
+
+%%------------------------------------------------------------------------------
+
+load_config(SetupCfg) ->
+    Name = proplists:get_value(default_config, SetupCfg, ?DEFAULT_CONF),
+    SetupApp = proplists:get_value(setup_app, SetupCfg),
+    File = filename:join(code:priv_dir(SetupApp), Name),
+
+    io:format("Using configuration file: ~p~n", [File]),
+    {ok, Config} = file:consult(File),
+    Replace = proplists:get_value(install_key_replace, SetupCfg, []),
+    io:format("But replacing the following keys:~n~p~n", [Replace]),
+    merge_config(Config, Replace).

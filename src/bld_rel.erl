@@ -275,7 +275,7 @@ check_setup_mod(_, _) ->
 get_location(Cfg) ->
     case lists:keyfind(install_location, 1, Cfg) of
         false -> [];
-        Tuple -> [Tuple]
+        {install_location, _} = Tuple -> [Tuple]
     end.
 
 
