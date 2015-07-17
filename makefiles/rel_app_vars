@@ -50,7 +50,7 @@ App_Src_Dir = $(app_name:%=lib/%/src/)
 a_app_vsn_mk = $(wildcard lib/$(app_name)/src/vsn.mk)
 a_app_version = $(if $(a_app_vsn_mk),\
   $(shell sed -n $(vsn_regexp) < $(a_app_vsn_mk) ),\
-  ($(warning The application $(app_name) is missing a vsn.mk file), \
+  ($(info INFO: The application $(app_name) is missing a vsn.mk file), \
     unknown_vsn))
 
 a_app_erl_files = $(wildcard $(App_Src_Dir:%=%*.erl))
