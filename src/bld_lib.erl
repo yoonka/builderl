@@ -172,9 +172,20 @@ node_name(Name, Suffix) ->
 
 
 start_erl_data() ->
-    {ok, Data} = file:read_file("releases/start_erl.data"),
+    File = "releases/start_erl.data",
+    case file:read_file(File) of
+        {ok, Data} -> start_erl_data(Data);
+        {error, Err} -> error_start_erl(File, Err)
+    end.
+
+start_erl_data(Data) ->
     [ErtsVsn, VsnBin] = binary:split(Data, <<" ">>),
     {trim(ErtsVsn), trim(VsnBin)}.
+
+error_start_erl(File, Err) ->
+    io:format("~nError when reading '~s': ~p~n", [File, Err]),
+    io:format("Note, the file should be created when compiling the project.~n"),
+    halt(1).
 
 %%------------------------------------------------------------------------------
 
