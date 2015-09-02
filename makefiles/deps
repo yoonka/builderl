@@ -83,15 +83,21 @@ get-deps: $(REBAR)
 	@echo Fetching dependencies for branch \'$(curr_branch)\'
 	@echo ========================================================================
 	@echo
-	for dep in $(dep_clone_args); do \
-		(cd lib && git clone $$dep) ; \
+	for ldep in $(lib_clone_deps); do \
+		(cd lib && git clone $$ldep) ; \
+	done
+	for dep in $(clone_deps); do \
+		git clone $$dep ; \
 	done
 
 .PHONY: rm-deps
 rm-deps: $(REBAR)
 	$(REBAR) del-deps
-	for dep in $(deps); do \
-		rm -rf lib/$$dep ; \
+	for ldep in $(lib_rm_deps); do \
+		rm -rf lib/$$ldep ; \
+	done
+	for dep in $(rm_deps); do \
+		rm -rf $$dep ; \
 	done
 
 compile-deps: $(REBAR)
