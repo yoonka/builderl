@@ -43,6 +43,13 @@ ifndef DEPSVSN
 
 curr_branch = $(shell git rev-parse --abbrev-ref HEAD 2> /dev/null)
 
+ifeq ($(curr_branch),)
+
+$(warning Error when checking git branch, using dependencies from 'master'.)
+curr_branch = $(GITMASTER)
+
+else # curr_branch
+
 # Include dependencies for the current branch.
 # If they can't be found, use dependencies for 'develop' if the name
 # of the current branch starts with 'develop'. Otherwise always use
@@ -55,6 +62,8 @@ else
 curr_branch = $(GITDEVELOP)
 endif
 endif
+
+endif # curr_branch
 
 else # DEPSVSN
 
