@@ -51,7 +51,8 @@ p_vsn = $($(p_name)_has_vsn)
 lib/%.app:
 	@rm -f $(DEV_BUILD_DONE)
 	@mkdir -p $(dir $@)
-	sed -e "s|%MODULES%|=MODULES=|g;s|%VSN%|=VSN=|g" < "$^" | \
+	sed -e \
+	  "s|%MODULES%|=MODULES=|g;s|%VSN%|=VSN=|g;s|{{modules}}|=MODULES=|g;s|{{vsn}}|=VSN=|g" < "$^" | \
 	sed -e \
 	  "s|=APP=|$(p_name)|g;s|=MODULES=|$(p_ins_mod)|g;s|=VSN=|$(p_vsn)|g" \
 	  > "$@"
