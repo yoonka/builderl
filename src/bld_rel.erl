@@ -70,13 +70,19 @@ mk_rel(BldLink) ->
     io:format("Ensure dir exists: ~p~n", [CWD ++ "/" ++ ?REL_PATH ++ "/"]),
     ok = filelib:ensure_dir(?REL_PATH ++ "/"),
 
-    [process_rel(Config) || {config, _} = Config <- File],
+    RelNames = [process_rel(Config) || {config, _} = Config <- File],
 
     link_builderl(BldLink, ?REL_PATH),
 
     Vsn = bld_lib:keyget(boot_version, BldCfg),
     RelDir = filename:join("releases", Vsn),
-    bld_lib:cp_file(RelDir, filename:join(?REL_PATH, RelDir), ?BUILDERL_CONFIG),
+    RelPath = filename:join(?REL_PATH, RelDir),
+    bld_lib:cp_file(RelDir, RelPath, ?BUILDERL_CONFIG),
+
+    RelFiles = [X ++ ".rel" || X <- RelNames -- get_cmd_rel(BldCfg)],
+    Releases = filename:join(?REL_PATH, "releases"),
+    Fun = fun(X) -> bld_lib:cp_file(RelPath, Releases, X) end,
+    lists:foreach(Fun, RelFiles),
 
     io:format("Create version information: '~s': ", [?RELEASE_DATA]),
     bld_lib:check_file_op(file:write_file(?RELEASE_DATA, Vsn)).
@@ -189,20 +195,6 @@ filter_paths([Path|T], Apps, Acc) ->
 filter_paths([], _Apps, Acc) ->
     Acc.
 
-%%------------------------------------------------------------------------------
-
-process_rel({config, {sys, Sys}} = Config) ->
-    BootRel = inc_get_boot_rel(Sys),
-    io:format("Create release '~s' in '~s'... ~n", [BootRel, ?REL_PATH]),
-    {ok, Server} = reltool:start_server([Config]),
-    check_result(reltool:create_target(Server, ?REL_PATH ++ "/")),
-    ok = reltool:stop(Server).
-
-check_result(ok) ->
-    io:format("Done.~n");
-check_result({error, Reason}) ->
-    io:format("Error:~n~p~n", [Reason]).
-
 make_rel(Dir, {Rel, Release}) ->
     PathBase = filename:join(Dir, Rel),
     RelFile = PathBase ++ ".rel",
@@ -211,6 +203,21 @@ make_rel(Dir, {Rel, Release}) ->
     io:format(" => Create release: ~s~n", [Rel]),
     ok = systools:make_script(PathBase),
     io:format("Release '~s' created.~n~n", [Rel]).
+
+%%------------------------------------------------------------------------------
+
+process_rel({config, {sys, Sys}} = Config) ->
+    BootRel = inc_get_boot_rel(Sys),
+    io:format("Create release '~s' in '~s'... ~n", [BootRel, ?REL_PATH]),
+    {ok, Server} = reltool:start_server([Config]),
+    check_result(reltool:create_target(Server, ?REL_PATH ++ "/")),
+    ok = reltool:stop(Server),
+    BootRel.
+
+check_result(ok) ->
+    io:format("Done.~n");
+check_result({error, Reason}) ->
+    io:format("Error:~n~p~n", [Reason]).
 
 %%------------------------------------------------------------------------------
 
