@@ -44,6 +44,7 @@
          chmod/2,
          mk_link/2,
          mk_dir/1,
+         rm_link/1,
          ensure_member/2,
          get_rel_dir/0,
          read_builderl_config/0,
@@ -234,6 +235,21 @@ mk_link(To, From) ->
 mk_dir(Name) ->
     io:format(standard_io, "Create folder '~s': ", [Name]),
     check_file_op(file:make_dir(Name)).
+
+rm_link(Link) ->
+    io:format(standard_io, "Remove link '~s': ", [Link]),
+    case file:read_link(Link) of
+        {ok, _} ->
+            check_file_op(file:delete(Link));
+        {error, enoent} ->
+            io:format(standard_io, "Doesn't exist, ignoring...~n", []);
+        {error, einval} ->
+            io:format(standard_io, "Not a link, aborting!~n", []),
+            halt(1);
+        {error, Err} ->
+            io:format(standard_io, "Error:~n~1000p~n", [Err]),
+            halt(1)
+    end.
 
 ensure_member(Elem, List) ->
     case lists:member(Elem, List) of

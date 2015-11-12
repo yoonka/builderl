@@ -564,12 +564,7 @@ do_install({_Action, Type, Suffix, Seq, Base}, SetupMod, InitConf, RunVars) ->
     Name = get_node_name(Type, Suffix, RunVars),
     KeyReplace = get_key_replace(SetupMod, Base, Name, Offset, RunVars),
     CfgArgs = create_args(Name, Cookie, KeyReplace, InitConf, RunVars),
-
-    RelDir = proplists:get_value(rel_dir, RunVars),
-    ConfigSrc = filename:join("etc", "sys.config.src"),
-    ConfigDest = filename:join(RelDir, Name ++ ".config"),
-    bld_lib:process_file(ConfigSrc, ConfigDest, CfgArgs, [force]),
-
+    RelDir = init_rel_files(Type, Name, RunVars, CfgArgs),
     Privs = process_data_file(RelDir, Base, Type, Name, RunVars, CfgArgs),
     process_app_configs(SetupMod, Privs, Base, CfgArgs),
 
@@ -651,6 +646,28 @@ name_param1(Name, {fqdn, Hostname}, false) ->
     "-name " ++ Name ++ "@" ++ Hostname;
 name_param1(Name, {local, Hostname}, _) ->
     "-sname " ++ Name ++ "@" ++ Hostname.
+
+%%------------------------------------------------------------------------------
+
+init_rel_files(Type, Name, RunVars, CfgArgs) ->
+    RelDir = proplists:get_value(rel_dir, RunVars),
+    ConfigSrc = filename:join("etc", "sys.config.src"),
+    ConfigName = Name ++ ".config",
+    ConfigDest = filename:join(RelDir, ConfigName),
+    bld_lib:process_file(ConfigSrc, ConfigDest, CfgArgs, [force]),
+
+    RelName = get_release_name(Type, RunVars),
+    BootName = RelName ++ ".boot",
+
+    ConfigLnk = filename:join(RelDir, "sys.config"),
+    BootLnk = filename:join(RelDir, "start.boot"),
+
+    bld_lib:rm_link(ConfigLnk),
+    bld_lib:rm_link(BootLnk),
+
+    bld_lib:mk_link(ConfigName, ConfigLnk),
+    bld_lib:mk_link(BootName, BootLnk),
+    RelDir.
 
 %%------------------------------------------------------------------------------
 
