@@ -677,6 +677,9 @@ process_data_file(RelDir, Base, Type, Name, RunVars, CfgArgs) ->
     StartFile = Name ++ start_file_ext(),
     create_start_script(Path, Base, RelName, Name, "vm.args", StartFile),
 
+    Bytes = rel_sh(Path, Base, RelName, Name),
+    write_start_script(Base, Name ++ ?RELEASES_EXT, Bytes),
+
     Data = get_rel_data(RelDir, RelName ++ ".data"),
     mk_vm_args(Base, Data, "vm.args", CfgArgs),
 
@@ -693,8 +696,10 @@ erl_path(false) -> "./bin/".
 
 create_start_script(Path, Base, Rel, CfgRel, ArgsFile, StartFile) ->
     Bytes = cmd_sh(Path, Base, Rel, CfgRel, ArgsFile),
-    File = filename:join([Base, "bin", StartFile]),
+    write_start_script(Base, StartFile, Bytes).
 
+write_start_script(Base, StartFile, Bytes) ->
+    File = filename:join([Base, "bin", StartFile]),
     io:format(standard_io, "Write start script '~s': ", [File]),
     bld_lib:check_file_op(file:write_file(File, Bytes)),
     bld_lib:chmod_exe(File).
@@ -708,6 +713,20 @@ cmd_sh(Path, Base, Rel, CfgRel, ArgsFile) ->
      Path ++ "erl " ++ Base ++ " releases releases/start_erl.data -config ",
      "releases/$APP_VSN/" ++ CfgRel ++ ".config -args_file " ++ Base ++ "/etc/",
      ArgsFile ++ " -boot releases/$APP_VSN/" ++ Rel ++ "\"\n"
+    ].
+
+rel_sh(Path, Base, Rel, CfgRel) ->
+    [
+     "#!/bin/sh\n",
+     "START_ERL=`cat releases/start_erl.data`\n",
+     "APP_VSN=${START_ERL#* }\n",
+     Path ++ "run_erl -daemon " ++ Base ++ "/shell/ " ++ Base ++ "/log \"exec ",
+     Path ++ "erl " ++ Base ++ " releases releases/start_erl.data -config ",
+     "releases/$APP_VSN/" ++ CfgRel ++ ".config -args_file " ++ Base,
+     "/etc/vm.args -boot releases/$APP_VSN/" ++ Rel ++ " -noshell -noinput ",
+     "-eval \\\"{ok, Cwd} = file:get_cwd(), release_handler:create_RELEASES(",
+     "Cwd, \\\\\\\"releases\\\\\\\", \\\\\\\"releases/$APP_VSN/"
+     ++ Rel ++ ".rel\\\\\\\", []), init:stop()\\\"\"\n"
     ].
 
 %% The *.data file is only present in the development environment where
@@ -746,7 +765,7 @@ install_cmd_scripts(RelDir, Path, Base, CmdRel, Name, CfgArgs) ->
 start_file_ext() -> ".sh".
 
 start_file_ext(undefined) -> start_file_ext();
-start_file_ext(CmdRel) -> "." ++ CmdRel ++ ".sh".
+start_file_ext(Middle) -> "." ++ Middle ++ ".sh".
 
 %%------------------------------------------------------------------------------
 

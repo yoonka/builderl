@@ -26,3 +26,5 @@
 -define(BUILD_INFO, "tmp/_build_info.tpl").
 
 -define(BUILDERL_CONFIG, "builderl.config").
+
+-define(RELEASES_EXT, ".RELEASES.sh").

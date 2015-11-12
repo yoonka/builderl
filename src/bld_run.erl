@@ -24,6 +24,8 @@
 
 -module(bld_run).
 
+-include_lib("builderl/include/builderl.hrl").
+
 -export([start/1, stop/1]).
 
 start_usage(Allowed) ->
@@ -32,10 +34,15 @@ start_usage(Allowed) ->
      "Starts the specified nodes.",
      "",
      "Usage:",
-     "  start.esh [ -v | -h | --help | [ <type> | <type>-<suffix> ]...",
+     "  start.esh [ -v | -h | --help ]",
+     "  start.esh [ <type> | <type>-<suffix> | --RELEASES ] ... ]",
      "",
      "  -h, --help",
      "    This help.",
+     "",
+     "  --RELEASES",
+     "    Starts the node only to create the 'releases/RELEASES' file",
+     "    and then the node is stopped.",
      "",
      "  <type>, <type>-<suffix>",
      "    If only the type is specified then it starts all nodes of the given",
@@ -52,7 +59,8 @@ stop_usage(Allowed) ->
      "Stops the specified nodes.",
      "",
      "Usage:",
-     "  stop.esh [ -v | -h | --help | [ <type> | <type>-<suffix> ]...",
+     "  stop.esh [ -v | -h | --help ]",
+     "  stop.esh [ <type> | <type>-<suffix> ] ...",
      "",
      "  -h, --help",
      "    This help.",
@@ -89,17 +97,29 @@ start1(["-h"], BldCfg) ->     print_usage(fun start_usage/1, BldCfg);
 start1(["--help"], BldCfg) -> print_usage(fun start_usage/1, BldCfg);
 start1(Other, BldCfg) ->      start2(Other, bld_lib:get_params(BldCfg), []).
 
-start2([Node|T], P, Acc) -> start2(T, P, bld_lib:add_node(Node, start, P, Acc));
-start2([], P, Acc) -> do_start(P, ensure_nodes(P, lists:reverse(Acc), start));
-start2(Other, _P, _Acc) -> bld_lib:halt_badarg(Other).
+start2(["--RELEASES"|T], P, Acc) ->
+    start2(T, P, bld_lib:ensure_member(releases, Acc));
+start2([Node|T], P, Acc) ->
+    start2(T, P, bld_lib:add_node(Node, start, P, Acc));
+start2([], P, Acc) ->
+    do_start(P, ensure_nodes(P, lists:reverse(Acc), start));
+start2(Other, _P, _Acc) ->
+    bld_lib:halt_badarg(Other).
 
-do_start({_, _, BldCfg}, OldOpts) ->
+do_start({_, _, BldCfg}, OrgOpts) ->
     Options = [{bld_lib:node_name(T, S, BldCfg), Dir}
-               || {node, start, T, S, Dir} <- OldOpts],
+               || {node, start, T, S, Dir} <- OrgOpts],
     io:format("Using options: ~p~n", [Options]),
     io:format(standard_io, "~n => Starting nodes...~n~n", []),
-    lists:foreach(fun(Node) -> bld_lib:start_node(Node, ".sh") end, Options),
+    Ext = get_extension(OrgOpts),
+    lists:foreach(fun(Node) -> bld_lib:start_node(Node, Ext) end, Options),
     io:format("Finished.~n").
+
+get_extension(OrgOpts) ->
+    case lists:member(releases, OrgOpts) of
+        true -> ?RELEASES_EXT;
+        false -> ".sh"
+    end.
 
 %%------------------------------------------------------------------------------
 
