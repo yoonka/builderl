@@ -103,10 +103,10 @@ err_suffix(Suffix) ->
      "regular expression: '" ++ ?SUFFIX_RE ++ "'."
     ].
 
-halt_badarg(Other)   -> bld_lib:print(err_badarg(Other)),   halt(1).
-halt_badtype(Text)   -> bld_lib:print(err_badtype(Text)),   halt(1).
-halt_duplicate(Node) -> bld_lib:print(err_duplicate(Node)), halt(1).
-halt_suffix(Suffix)  -> bld_lib:print(err_suffix(Suffix)),  halt(1).
+halt_badarg(Other)   -> print(err_badarg(Other)),   halt(1).
+halt_badtype(Text)   -> print(err_badtype(Text)),   halt(1).
+halt_duplicate(Node) -> print(err_duplicate(Node)), halt(1).
+halt_suffix(Suffix)  -> print(err_suffix(Suffix)),  halt(1).
 
 %%------------------------------------------------------------------------------
 
@@ -327,7 +327,7 @@ connect_to_node(Dir) ->
     Cookie = trim(read_data(filename:join(Dir, ".erlang.cookie"))),
     {NameType, Hostname} = extract_host_name(Dir),
     Arg = [?NAME, NameType],
-    Res = net_kernel:start(Arg),
+    Res = start_distribution(Arg),
     io:format("Started Net Kernel with Arg: ~p, Result: ~p~n", [Arg, Res]),
     io:format("Running as node:~p~n~n", [node()]),
     erlang:set_cookie(node(), list_to_atom(Cookie)),
@@ -361,6 +361,18 @@ extract_host({Start, Length} = Part, Line) ->
     NewStart = Start + Length + 1,
     Host = binary:part(Line, {NewStart, byte_size(Line) - NewStart}),
     {binary:part(Line, Part), trim(binary_to_list(Host))}.
+
+start_distribution(Arg) ->
+    case net_kernel:start(Arg) of
+        {ok, _} -> ok;
+        {error, {already_started, _}} -> already_started;
+        {error, Err} -> halt_no_distribution(Err)
+    end.
+
+halt_no_distribution(Err) ->
+    Msg = "Error, couldn't switch to distributed node: ~p~n",
+    io:format(standard_error, Msg, [Err]),
+    halt(1).
 
 %%------------------------------------------------------------------------------
 

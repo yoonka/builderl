@@ -71,6 +71,7 @@ usage(DefNodes, DefJoins, Allowed) ->
      "  init.esh [-f] [--config <section>]",
      "           [-i (<type> | <type>-<suffix>)]...",
      "           [-s (<type> | <type>-<suffix>)]...",
+     "           [-o (<type> | <type>-<suffix>)]",
      "           [-j (<type> | <type>-<suffix> | <node@host>)[, ...]]...",
      "",
      "  init.esh [-f] [--config <section>]",
@@ -123,6 +124,15 @@ usage(DefNodes, DefJoins, Allowed) ->
      "    node and will leave it running. That node can then be supplied with",
      "    the '-j' argument when installing another node.",
      "    (See '-j' for more information).",
+     "",
+     "  -o <type>, -o <type>-<suffix>",
+     "    Can be specified only once. Selects the node for which the script",
+     "    should prepare files needed to do OTP upgrades:",
+     "    sys.config, start.boot and RELEASES",
+     "    This option can be omitted if only one node is being installed,",
+     "    in which case that node will be selected automatically.",
+     "    If more than one nodes is being installed and this option is not",
+     "    specified then none of the nodes will be prepared for OTP upgrades."
      "",
      "  -j (<type> | <type>-<suffix> | <node@host>)...",
      "    Used by the node installation module (e.g. to create a shared mnesia",
@@ -188,7 +198,7 @@ joins_to_str([], Acc) ->
 
 do2(Other, BldConf) ->
     Params = bld_lib:get_params(BldConf),
-    Options = parse(Other, Params),
+    Options = add_otp(parse(Other, Params)),
     kick_off(runtime_variables(BldConf), Options).
 
 check_release() ->
@@ -222,6 +232,8 @@ parse(["-i", Node | T],         P, J, Acc) ->
     parse(T, P, false, bld_lib:add_node(Node, install, P, add_joins(J, Acc)));
 parse(["-s", Node | T],         P, J, Acc) ->
     parse(T, P, false, bld_lib:add_node(Node, setup,   P, add_joins(J, Acc)));
+parse(["-o", Node | T],         P, J, Acc) ->
+    parse(T, P, false, add_mk_otp(Node, P,                add_joins(J, Acc)));
 parse(["-j", Type | T],         P, J, Acc) ->
     parse(T, P, [add_join_type(Type, P)],                 add_joins(J, Acc));
 parse([],                       P, J, Acc) ->
@@ -239,6 +251,12 @@ add_config(Config, Acc) ->
         orelse begin bld_lib:print([err5()]), halt(1) end,
     [{config, Config} | Acc].
 
+add_mk_otp(Node, P, Acc) ->
+    not lists:keymember(mk_otp, 1, Acc)
+        orelse begin bld_lib:print([err6()]), halt(1) end,
+    {Type, Suffix} = bld_lib:extract_node(Node, P),
+    [{mk_otp, Type, Suffix} | Acc].
+
 add_join_type(Text, Params) ->
     case string:chr(Text, $@) of
         0 -> bld_lib:extract_node(Text, Params);
@@ -246,6 +264,8 @@ add_join_type(Text, Params) ->
     end.
 
 err5() -> "Error, the '--config' option is specified multiple times.".
+
+err6() -> "Error, option '-o' is specified multiple times.".
 
 ensure_nodes(Params, Options) ->
     case lists:keymember(node, 1, Options) of
@@ -281,6 +301,62 @@ add_seq(P, [Other | T], NewOptions, Counters) ->
     add_seq(P, T, [Other | NewOptions], Counters);
 add_seq(_P, [], NewOptions, _Counters) ->
     lists:reverse(NewOptions).
+
+%%------------------------------------------------------------------------------
+
+add_otp(Options) ->
+    case is_otp(Options) of
+        true ->
+            Options;
+        false ->
+            Nodes = [{T, S} || {node, _, T, S, _, _} <- Options],
+            select_otp(Nodes, Options)
+    end.
+
+is_otp(Options) ->
+    case lists:keyfind(mk_otp, 1, Options) of
+        false ->
+            false;
+        {mk_otp, Type, Suffix} ->
+            check_install(fun err8/1, Type, Suffix, Options)
+    end.
+
+check_install(ErrFun, Type, Suffix, Options) ->
+    is_install(Type, Suffix, Options)
+        orelse halt_no_install(ErrFun, Type, Suffix).
+
+is_install(Type, Suffix, Options) ->
+    lists:any(fun(X) -> is_install1(X, Type, Suffix) end, Options).
+
+is_install1({node, install, T, S, _, _}, Type, Suffix)
+  when T =:= Type, S =:= Suffix -> true;
+is_install1(_X, _Type, _Suffix) -> false.
+
+halt_no_install(ErrFun, Type, Suffix) ->
+    bld_lib:print(ErrFun(type_suffix(Type, Suffix))), halt(1).
+
+type_suffix(Type, Suffix) ->
+    atom_to_list(Type) ++ if Suffix =:= [] -> ""; true -> "-" ++ Suffix end.
+
+err8(Node) ->
+    [
+     "Error, node '" ++ Node ++ "' is unknown to the script. Only nodes that",
+     "are being installed can be prepared for OTP upgrades.",
+     "Please ensure that the node specified with '-o' is also specified",
+     "with '-i'.",
+     "Use -h or --help for more information about options."
+    ].
+
+select_otp([{Type, Suffix}], Options) ->
+    Msg = "Single node '" ++ type_suffix(Type, Suffix) ++ "' is being "
+        "installed.~nSelecting it to be prepared for OTP upgrades.~n~n",
+    io:format(standard_io, Msg, []),
+    [{mk_otp, Type, Suffix}|Options];
+select_otp(_, Options) ->
+    Msg = "Installing multiple nodes and option '-o' is not specified.~n"
+        "Not selecting a node to be prepared for OTP upgrades.~n~n",
+    io:format(standard_io, Msg, []),
+    Options.
 
 %%------------------------------------------------------------------------------
 
@@ -393,29 +469,14 @@ kick_off(RunVars, Options) ->
     connect_to_started(Added),
     install_known(
       Installs, ToConnect, Clusters, Known, InitConf, RunVars),
+    install_otp(RunVars, Options),
     io:format(standard_io, "~nFinished.~n", []).
 
 %%------------------------------------------------------------------------------
 
 check_joins(Clusters, Options) ->
     All = lists:usort(lists:flatten(Clusters)),
-    [check_join(Type, Suffix, Options) || {Type, Suffix} <- All].
-
-check_join(Type, Suffix, Options) ->
-    is_install(Type, Suffix, Options) orelse halt_no_install(Type, Suffix).
-
-is_install(Type, Suffix, Options) ->
-    lists:any(fun(X) -> is_install1(X, Type, Suffix) end, Options).
-
-is_install1({node, install, T, S, _, _}, Type, Suffix)
-  when T =:= Type, S =:= Suffix -> true;
-is_install1(_X, _Type, _Suffix) -> false.
-
-halt_no_install(Type, Suffix) ->
-    bld_lib:print(err4(type_suffix(Type, Suffix))), halt(1).
-
-type_suffix(Type, Suffix) ->
-    atom_to_list(Type) ++ if Suffix =:= [] -> ""; true -> "-" ++ Suffix end.
+    [check_install(fun err4/1, Type, Suffix, Options) || {Type, Suffix} <- All].
 
 err4(Node) ->
     [
@@ -564,7 +625,7 @@ do_install({_Action, Type, Suffix, Seq, Base}, SetupMod, InitConf, RunVars) ->
     Name = get_node_name(Type, Suffix, RunVars),
     KeyReplace = get_key_replace(SetupMod, Base, Name, Offset, RunVars),
     CfgArgs = create_args(Name, Cookie, KeyReplace, InitConf, RunVars),
-    RelDir = init_rel_files(Type, Name, RunVars, CfgArgs),
+    RelDir = init_rel_files(Name, RunVars, CfgArgs),
     Privs = process_data_file(RelDir, Base, Type, Name, RunVars, CfgArgs),
     process_app_configs(SetupMod, Privs, Base, CfgArgs),
 
@@ -649,25 +710,14 @@ name_param1(Name, {local, Hostname}, _) ->
 
 %%------------------------------------------------------------------------------
 
-init_rel_files(Type, Name, RunVars, CfgArgs) ->
+init_rel_files(Name, RunVars, CfgArgs) ->
     RelDir = proplists:get_value(rel_dir, RunVars),
     ConfigSrc = filename:join("etc", "sys.config.src"),
-    ConfigName = Name ++ ".config",
-    ConfigDest = filename:join(RelDir, ConfigName),
+    ConfigDest = filename:join(RelDir, config_name(Name)),
     bld_lib:process_file(ConfigSrc, ConfigDest, CfgArgs, [force]),
-
-    RelName = get_release_name(Type, RunVars),
-    BootName = RelName ++ ".boot",
-
-    ConfigLnk = filename:join(RelDir, "sys.config"),
-    BootLnk = filename:join(RelDir, "start.boot"),
-
-    bld_lib:rm_link(ConfigLnk),
-    bld_lib:rm_link(BootLnk),
-
-    bld_lib:mk_link(ConfigName, ConfigLnk),
-    bld_lib:mk_link(BootName, BootLnk),
     RelDir.
+
+config_name(Name) -> Name ++ ".config".
 
 %%------------------------------------------------------------------------------
 
@@ -1020,6 +1070,37 @@ configure_node1(Cluster, {Remote, Module}, SetupApp, SetupCfg) ->
     Args = [{Id, R} || {Id, _Type, R, _Module} <- Cluster],
     ok = rpc:call(Remote, Module, install, [Args, SetupCfg]),
     io:format(standard_io, "Done.~n", []).
+
+%%------------------------------------------------------------------------------
+
+install_otp(RunVars, Options) ->
+    case lists:keyfind(mk_otp, 1, Options) of
+        false -> ok;
+        {_, Type, Suffix} -> install_otp(Type, Suffix, RunVars, Options)
+    end.
+
+install_otp(Type, Suffix, RunVars, Options) ->
+    Name = get_node_name(Type, Suffix, RunVars),
+    bld_lib:h_line("~n---" ++ Name),
+    io:format(standard_io, "~n => Preparing for OTP upgrades...~n~n", []),
+    RelDir = proplists:get_value(rel_dir, RunVars),
+    ConfigLnk = filename:join(RelDir, "sys.config"),
+    BootLnk = filename:join(RelDir, "start.boot"),
+    bld_lib:rm_link(ConfigLnk),
+    bld_lib:rm_link(BootLnk),
+
+    RelName = get_release_name(Type, RunVars),
+    bld_lib:mk_link(config_name(Name), ConfigLnk),
+    bld_lib:mk_link(RelName ++ ".boot", BootLnk),
+
+    {_, _, _, _, Base} = Node = find_node(Type, Suffix, Options),
+    Msg = "~n => Starting node to create the RELEASES file...~n~n",
+    io:format(standard_io, Msg, []),
+    bld_lib:start_node({Name, Base}, ?RELEASES_EXT),
+    wait_for_nodes([Node]).
+
+find_node(T, S, [{node, install, T, S, Seq, D}|_]) -> {install, T, S, Seq, D};
+find_node(T, S, [_|Tail]) -> find_node(T, S, Tail).
 
 %%------------------------------------------------------------------------------
 
