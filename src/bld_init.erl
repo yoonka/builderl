@@ -28,7 +28,14 @@
 
 -export([do/1, merge_config/2, load_config/1]).
 
+%% Time to wait for the release cmd to start before starting installation
 -define(TIMEOUT, 15000).
+
+%% Time to wait for the node to stop before preparing for OTP upgrades
+-define(STOP_TIMEOUT, 10000).
+
+%% Time to wait for the node to stop after creating the RELEASES file
+-define(REL_STOP_TIMEOUT, 120000).
 
 %% Folder that can be used to load patches to the running system.
 %% Since the script installs OTP releases that should be upgraded using the
@@ -469,7 +476,7 @@ kick_off(RunVars, Options) ->
     connect_to_started(Added),
     install_known(
       Installs, ToConnect, Clusters, Known, InitConf, RunVars),
-    install_otp(RunVars, Options),
+    install_otp(Installs, RunVars, Options),
     io:format(standard_io, "~nFinished.~n", []).
 
 %%------------------------------------------------------------------------------
@@ -926,11 +933,11 @@ wait_for_nodes(Nodes) ->
 
 wait_for_nodes([{_, _, _, _, Base} = Opt | T], Timeout, Start, Acc) ->
     {Res, Remote} = bld_lib:connect_to_node(Base),
-    TimeDiff = get_time_diff(Start),
+    TimeDiff = bld_lib:get_time_diff(Start),
     wait_for_nodes(Res, Remote, Opt, T, Timeout, Start, TimeDiff, Acc);
 wait_for_nodes([Remote | T], Timeout, Start, Acc) when is_atom(Remote) ->
     Res = connect_with_name(Remote),
-    TimeDiff = get_time_diff(Start),
+    TimeDiff = bld_lib:get_time_diff(Start),
     wait_for_nodes(Res, Remote, Remote, T, Timeout, Start, TimeDiff, Acc);
 wait_for_nodes([], _Timeout, _Start, Acc) ->
     lists:reverse(Acc).
@@ -948,15 +955,12 @@ wait_for_nodes(false, Remote, Opt, T, Timeout, Start, TimeDiff, Acc)
   when TimeDiff < Timeout ->
     timer:sleep(500),
     Res = connect_with_name(Remote),
-    NewTimeDiff = get_time_diff(Start),
+    NewTimeDiff = bld_lib:get_time_diff(Start),
     wait_for_nodes(Res, Remote, Opt, T, Timeout, Start, NewTimeDiff, Acc);
 wait_for_nodes(false, Remote, _Opt, _T, _Timeout, _Start, _TimeDiff, _Acc) ->
     Msg = "Time out error when waiting for node '~s', aborting...~n",
     io:format(standard_error, Msg, [Remote]),
     halt(1).
-
-get_time_diff(Start) ->
-    timer:now_diff(os:timestamp(), Start) div 1000.
 
 new_opt({Action, Type, Suffix, _Seq, _Base}, Remote) ->
     {Action, Remote, Type, Suffix};
@@ -1073,16 +1077,35 @@ configure_node1(Cluster, {Remote, Module}, SetupApp, SetupCfg) ->
 
 %%------------------------------------------------------------------------------
 
-install_otp(RunVars, Options) ->
-    case lists:keyfind(mk_otp, 1, Options) of
-        false -> ok;
-        {_, Type, Suffix} -> install_otp(Type, Suffix, RunVars, Options)
-    end.
+install_otp(Installs, RunVars, Options) ->
+    install_otp(Installs, RunVars, Options, lists:keyfind(mk_otp, 1, Options)).
 
-install_otp(Type, Suffix, RunVars, Options) ->
+install_otp(_Installs, _RunVars, _Options, false) ->
+    ok;
+install_otp(Installs, RunVars, Options, {_, Type, Suffix}) ->
     Name = get_node_name(Type, Suffix, RunVars),
     bld_lib:h_line("~n---" ++ Name),
-    io:format(standard_io, "~n => Preparing for OTP upgrades...~n~n", []),
+    io:format(standard_io, "Preparing for OTP upgrades...~n~n", []),
+
+    {_, _, _, _, Base} = Node = find_node(Type, Suffix, Options),
+    Remote = find_remote(Type, Suffix, Installs),
+    mk_otp_links(Type, Suffix, Name, RunVars),
+    wait_node_stopped(Remote, ?STOP_TIMEOUT),
+
+    Msg = "~n => Starting node to create the RELEASES file...~n~n",
+    io:format(standard_io, Msg, []),
+    bld_lib:start_node({Name, Base}, ?RELEASES_EXT),
+    wait_for_nodes([Node]),
+
+    wait_node_stopped(Remote, ?REL_STOP_TIMEOUT).
+
+find_node(T, S, [{node, install, T, S, Seq, D}|_]) -> {install, T, S, Seq, D};
+find_node(T, S, [_|Tail]) -> find_node(T, S, Tail).
+
+find_remote(T, S, [{R, T, S}|_]) -> R;
+find_remote(T, S, [_|Tail]) -> find_remote(T, S, Tail).
+
+mk_otp_links(Type, Suffix, Name, RunVars) ->
     RelDir = proplists:get_value(rel_dir, RunVars),
     ConfigLnk = filename:join(RelDir, "sys.config"),
     BootLnk = filename:join(RelDir, "start.boot"),
@@ -1091,16 +1114,31 @@ install_otp(Type, Suffix, RunVars, Options) ->
 
     RelName = get_release_name(Type, RunVars),
     bld_lib:mk_link(config_name(Name), ConfigLnk),
-    bld_lib:mk_link(RelName ++ ".boot", BootLnk),
+    bld_lib:mk_link(RelName ++ ".boot", BootLnk).
 
-    {_, _, _, _, Base} = Node = find_node(Type, Suffix, Options),
-    Msg = "~n => Starting node to create the RELEASES file...~n~n",
-    io:format(standard_io, Msg, []),
-    bld_lib:start_node({Name, Base}, ?RELEASES_EXT),
-    wait_for_nodes([Node]).
+wait_node_stopped(Remote, Timeout) ->
+    Msg = "~n => Waiting for node '~p' to stop...~n",
+    io:format(standard_io, Msg, [Remote]),
+    wait_node_stopped(Remote, Timeout, os:timestamp()).
 
-find_node(T, S, [{node, install, T, S, Seq, D}|_]) -> {install, T, S, Seq, D};
-find_node(T, S, [_|Tail]) -> find_node(T, S, Tail).
+wait_node_stopped(Remote, Timeout, Start) ->
+    case net_adm:ping(Remote) of
+        pang -> ok;
+        pong -> wait_node_stopped1(Remote, Timeout, Start)
+    end.
+
+wait_node_stopped1(Remote, Timeout, Start) ->
+    case bld_lib:get_time_diff(Start) >= Timeout of
+        true -> halt_cannot_stop(Remote);
+        false -> ok
+    end,
+    timer:sleep(500),
+    wait_node_stopped(Remote, Timeout, Start).
+
+halt_cannot_stop(Remote) ->
+    Msg = "Error, node '~p' didn't stop, can't continue, aborting.~n",
+    io:format(standard_error, Msg, [Remote]),
+    halt(1).
 
 %%------------------------------------------------------------------------------
 

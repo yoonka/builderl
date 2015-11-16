@@ -58,6 +58,7 @@
          start_node/2,
          running_nodes/0,
          connect_to_node/1,
+         get_time_diff/1,
          process_file/3,
          process_file/4,
          read_data/1,
@@ -76,6 +77,9 @@
 
 %% Regular expression that a node suffix must match
 -define(SUFFIX_RE, "^[\\w-.#+]*$").
+
+%% How long to wait for epmd to start with the node
+-define(EPMD_TIMEOUT, 4000).
 
 %%------------------------------------------------------------------------------
 
@@ -363,16 +367,33 @@ extract_host({Start, Length} = Part, Line) ->
     {binary:part(Line, Part), trim(binary_to_list(Host))}.
 
 start_distribution(Arg) ->
+    error_logger:tty(false),
+    io:format("Waiting for epmd to start...~n", []),
+    start_distribution(Arg, ?EPMD_TIMEOUT, os:timestamp()),
+    error_logger:tty(true).
+
+start_distribution(Arg, Timeout, Start) ->
     case net_kernel:start(Arg) of
         {ok, _} -> ok;
         {error, {already_started, _}} -> already_started;
-        {error, Err} -> halt_no_distribution(Err)
+        {error, Err} -> no_distribution(Arg, Timeout, Start, Err)
     end.
+
+no_distribution(Arg, Timeout, Start, Err) ->
+    case get_time_diff(Start) >= Timeout of
+        true -> halt_no_distribution(Err);
+        false -> ok
+    end,
+    timer:sleep(500),
+    start_distribution(Arg, Timeout, Start).
 
 halt_no_distribution(Err) ->
     Msg = "Error, couldn't switch to distributed node: ~p~n",
     io:format(standard_error, Msg, [Err]),
     halt(1).
+
+get_time_diff(Start) ->
+    timer:now_diff(os:timestamp(), Start) div 1000.
 
 %%------------------------------------------------------------------------------
 
