@@ -28,6 +28,9 @@
 
 -export([mk_dev/0, mk_rel/1]).
 
+%% Internal exports
+-export([get_reltool_config/0]).
+
 -define(RELTOOL_CONFIG, "etc/reltool.config").
 
 %% Location of the vm_local.args file used when starting local VMs

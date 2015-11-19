@@ -161,8 +161,8 @@ lib/%.beam:
 	@mkdir -p $(dir $@)
 	$(ERLC) \
 	  $(ERLCFLAGS) \
-	  -DVSN='"$(w_vsn)"' \
 	  -DCOMPILE_TIME_STAMP='"$(DATE_NOW)"'\
+	  -DOTP_REL_VSN='"$(OTP_REL_VSN)"'\
 	  -I lib -I deps \
 	  -o $(dir $@) \
 	  $(w_src)

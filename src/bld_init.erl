@@ -1089,7 +1089,7 @@ install_otp(Installs, RunVars, Options, {_, Type, Suffix}) ->
 
     {_, _, _, _, Base} = Node = find_node(Type, Suffix, Options),
     Remote = find_remote(Type, Suffix, Installs),
-    mk_otp_links(Type, Suffix, Name, RunVars),
+    mk_otp_links(Type, Name, RunVars),
     wait_node_stopped(Remote, ?STOP_TIMEOUT),
 
     Msg = "~n => Starting node to create the RELEASES file...~n~n",
@@ -1105,7 +1105,7 @@ find_node(T, S, [_|Tail]) -> find_node(T, S, Tail).
 find_remote(T, S, [{R, T, S}|_]) -> R;
 find_remote(T, S, [_|Tail]) -> find_remote(T, S, Tail).
 
-mk_otp_links(Type, Suffix, Name, RunVars) ->
+mk_otp_links(Type, Name, RunVars) ->
     RelDir = proplists:get_value(rel_dir, RunVars),
     ConfigLnk = filename:join(RelDir, "sys.config"),
     BootLnk = filename:join(RelDir, "start.boot"),

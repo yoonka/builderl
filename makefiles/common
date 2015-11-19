@@ -67,6 +67,7 @@ PWD_PATH = $(shell pwd -P)
 ERL ?= $(shell which erl)
 ERL := $(realpath $(ERL))
 ERLC := $(ERL:%=%c)
+OTP_REL_VSN = $(shell erl -eval 'erlang:display(erlang:system_info(otp_release)), halt().' -noshell)
 
 # NOTE: Recursive wildcard function to extract a list of files contained in
 #       a given directory. This is a variation of an original implementation

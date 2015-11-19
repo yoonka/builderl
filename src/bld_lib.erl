@@ -40,6 +40,7 @@
          trim/1,
          print/1,
          h_line/1,
+         h_line/2,
          chmod_exe/1,
          chmod/2,
          mk_link/2,
@@ -66,7 +67,8 @@
          cp_file/4,
          cp_dir/4,
          check_file_op/1,
-         write_terms/2
+         write_terms/2,
+         call/2
         ]).
 
 %% Name of the node running this escript
@@ -216,12 +218,15 @@ trim(What) ->
 print(Lines) -> [io:format(standard_error, X ++ "~n", []) || X <- Lines].
 
 h_line(Msg) ->
-    h_line(Msg, Msg, 80).
+    h_line(Msg, Msg, 80, $-).
 
-h_line([$~, $n, T], Org, Line) ->
-    h_line(T, Org, Line + 2);
-h_line(Msg, Org, Line) ->
-    HLine = Msg ++ lists:duplicate(Line - length(Org), $-) ++ "~n",
+h_line(Msg, Char) ->
+    h_line(Msg, Msg, 80, Char).
+
+h_line([$~, $n, T], Org, Line, Char) ->
+    h_line(T, Org, Line + 2, Char);
+h_line(Msg, Org, Line, Char) ->
+    HLine = Msg ++ lists:duplicate(Line - length(Org), Char) ++ "~n",
     io:format(standard_io, HLine, []).
 
 chmod_exe(File) ->
@@ -494,3 +499,20 @@ write_terms(File, Terms) ->
     FormatFun = fun(Term) -> io_lib:format("~p.~n", [Term]) end,
     Texts = lists:map(FormatFun, Terms),
     ok = file:write_file(File, Texts).
+
+%%------------------------------------------------------------------------------
+
+call(Fun, ArgL) ->
+    ReplyTo = self(),
+    Keys = [spawn(fun() -> ReplyTo ! {self(), promise_reply, Fun(A)} end)
+            || A <- ArgL],
+
+    Yield = fun(Key) ->
+                    receive
+                        {Key, promise_reply, {error, _R} = E} -> E;
+                        {Key, promise_reply, {'EXIT', {error, _R} = E}} -> E;
+                        {Key, promise_reply, {'EXIT', R}} -> {error, R};
+                        {Key, promise_reply, R} -> R
+                    end
+            end,
+    [Yield(Key) || Key <- Keys].
