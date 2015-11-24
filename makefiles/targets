@@ -162,7 +162,7 @@ lib/%.beam:
 	$(ERLC) \
 	  $(ERLCFLAGS) \
 	  -DCOMPILE_TIME_STAMP='"$(DATE_NOW)"'\
-	  -DOTP_REL_VSN='"$(OTP_REL_VSN)"'\
+	  -DOTP_REL_VSN='$(OTP_REL_VSN)'\
 	  -I lib -I deps \
 	  -o $(dir $@) \
 	  $(w_src)
