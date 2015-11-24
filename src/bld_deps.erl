@@ -29,7 +29,7 @@
 -export([start/1]).
 
 -define(DEPSDIR, <<"deps-versions">>).
--define(CMDS, [get, rm]).
+-define(CMDS, [st, get, rm]).
 -define(DEFAULTDEPSDIR, <<"lib">>).
 
 usage() ->
@@ -47,6 +47,13 @@ usage() ->
      "  <cmd>",
      "    Command to execute. Available commands:",
      "    " ++ all_cmds(),
+     "  where:",
+     "    st:  git status in a dependency",
+     "    get: git clone (or fetch if exists) a dependency",
+     "    rm:  delete a dependency with rm -rf",
+     "",
+     "  -f",
+     "    Force delete the dependency if the folder is dirty.",
      "",
      "  -d <branch>",
      "    Default branch to use if the current directory is not a git",
@@ -78,7 +85,9 @@ start1(["-b" = Arg, Branch|T], Acc) ->
     start1(T, ensure_one(Arg, {branch, to_binary(Branch)}, Acc));
 start1(["-u" = Arg, Url|T], Acc) ->
     start1(T, ensure_one(Arg, {url, to_binary(Url)}, Acc));
-start1([Cmd|T], Acc) when Cmd =:= "get"; Cmd =:= "rm" ->
+start1(["-f"|T], Acc) ->
+    start1(T, bld_lib:ensure_member(force, Acc));
+start1([Cmd|T], Acc) when Cmd =:= "st"; Cmd =:= "get"; Cmd =:= "rm" ->
     start1(T, [{cmd, list_to_atom(Cmd)}|Acc]);
 start1([], Acc) ->
     do_start(ensure_url(lists:reverse(Acc)));
@@ -128,15 +137,18 @@ do_start(Options) ->
 
     Default = proplists:get_value(default_branch, Options),
     DepsOrg = read_deps(Default, proplists:get_value(branch, Options)),
+    Force = lists:member(force, Options),
     Url = proplists:get_value(url, Options),
     Cmds = [X || {cmd, X} <- Options],
     {ok, MP} = re:compile(<<"=REPOBASE=">>),
     Args = [global, {return, binary}],
-    Deps = [{X, re:replace(Y, MP, Url, Args)} || {X, Y} <- DepsOrg],
+    Deps = [{X, Y, re:replace(Z, MP, Url, Args)} || {X, Y, Z} <- DepsOrg],
 
-    Fun = fun(X) -> execute(Cmds, X) end,
+    CmdsTxt = string:join([atom_to_list(X) || X <- Cmds], "; "),
+    io:format("=== Executing: '~s' in each child repository...~n", [CmdsTxt]),
+    Fun = fun(X) -> execute(Cmds, X, Force) end,
     Res = bld_lib:call(Fun, Deps),
-    io:format("All finished, result: ~p~n", [lists:usort(Res)]).
+    io:format("=== All finished, result: ~p~n", [lists:usort(Res)]).
 
 halt_no_git() -> bld_lib:print(err_nogit()), halt(1).
 
@@ -188,6 +200,7 @@ read_deps_file(Branch) ->
         {ok, UserCfg} ->
             io:format(standard_io, "OK~n", []),
             bld_lib:h_line("=", $=),
+            io:format("~n"),
             {ok, MP} = re:compile(<<"(\\s+)">>),
             [normalize_deps(MP, X) || X <- UserCfg];
         {error, Err} ->
@@ -195,13 +208,13 @@ read_deps_file(Branch) ->
             halt(1)
     end.
 
-normalize_deps(MP, {Cmd, AppDir}) ->
-    normalize_deps(MP, ?DEFAULTDEPSDIR, Cmd, AppDir);
-normalize_deps(MP, {Dir, Cmd, AppDir}) ->
-    normalize_deps(MP, Dir, Cmd, AppDir).
+normalize_deps(MP, {Tag, Cmd, AppDir}) ->
+    normalize_deps(MP, ?DEFAULTDEPSDIR, Tag, Cmd, AppDir);
+normalize_deps(MP, {Dir, Tag, Cmd, AppDir}) ->
+    normalize_deps(MP, Dir, Tag, Cmd, AppDir).
 
-normalize_deps(MP, Dir, Cmd, AppDir) ->
-    {to_binary(filename:join(Dir, AppDir)), compact(MP, Cmd)}.
+normalize_deps(MP, Dir, Tag, Cmd, AppDir) ->
+    {to_binary(filename:join(Dir, AppDir)), to_binary(Tag), compact(MP, Cmd)}.
 
 compact(MP, What) -> re:replace(What, MP, " ", [global, {return, list}]).
 
@@ -215,5 +228,73 @@ err_nobranch() ->
 
 %%------------------------------------------------------------------------------
 
-execute(Cmds, Dep) ->
-    io:format("Execute ~p for ~p~n", [Cmds, Dep]).
+execute(Cmds, {Path, Tag, Clone}, Force) ->
+    Fun = fun(st)  -> execute_st(Path);
+             (get) -> execute_get(Path, Tag, Clone);
+             (rm)  -> execute_rm(Path, Force)
+          end,
+    lists:foreach(fun(X) -> print_result(Fun(X)) end, Cmds).
+
+print_result({ok, Lines}) -> io:format(standard_io, Lines, []);
+print_result({error, Lines}) -> io:format(standard_error, Lines, []).
+
+format_error(Path, Err) -> format_error(Path, Err, []).
+
+format_error(Path, {0, List}, L) -> format_error(dirty, Path, List, L);
+format_error(Path, {_, List}, L) -> format_error(error, Path, List, L).
+
+format_error(Type, Path, List, L) ->
+    format_error1(Type, Path, List) ++ L ++ [<<"\n<--\n">>].
+
+format_error1(dirty, Path, L) ->
+    [<<"==> ! local changes: ">>, Path, <<"\n ">> | bin_join(L, <<"\n ">>, [])];
+format_error1(error, Path, L) ->
+    [<<"==> !! error: ">>, Path, <<"\n">> | bin_join(L, <<"\n">>, [])].
+
+bin_join([Line], _, Acc) -> lists:reverse([Line|Acc]);
+bin_join([Line|T], Sep, Acc) -> bin_join(T, Sep, [Sep, Line|Acc]);
+bin_join([], _, Acc) -> Acc.
+
+not_a_directory(Path) ->
+    {ok, [<<"not a directory, ignoring: ">>, Path, <<"\n">>]}.
+
+%%------------------------------------------------------------------------------
+
+execute_st(Path) -> format_status(Path, bld_cmd:git_status(Path)).
+
+format_status(Path, false) -> not_a_directory(Path);
+format_status(Path, {0, []}) -> {ok, [<<"clean: ">>, Path, <<"\n">>]};
+format_status(Path, Err) -> {error, format_error(Path, Err)}.
+
+%%------------------------------------------------------------------------------
+
+execute_get(Path, Tag, Clone) ->
+    io:format("get ~p ~p ~p~n", [Path, Tag, Clone]).
+
+%%------------------------------------------------------------------------------
+
+execute_rm(Path, Force) -> execute_rm(Path, Force, bld_cmd:git_status(Path)).
+
+execute_rm(Path, _, false) ->
+    not_a_directory(Path);
+execute_rm(Path, _, {0, []}) ->
+    case format_rm(Path, false, do_rm(Path)) of
+        {ok, _} = RetOK -> RetOK;
+        {error, Lines} -> {error, format_error(error, Path, Lines, [])}
+    end;
+execute_rm(Path, false, Err) ->
+    {error, format_error(Path, Err)};
+execute_rm(Path, true, Err) ->
+    LineSep = <<"\n---\n">>,
+    case format_rm(Path, true, do_rm(Path)) of
+        {ok, Lines} -> {ok, format_error(Path, Err, [LineSep|Lines])};
+        {error, Lines} -> {error, format_error(Path, Err, [LineSep|Lines])}
+    end.
+
+do_rm(Path) -> bld_cmd:rm_rf(Path).
+
+format_rm(Path, false, {0, []}) -> {ok, [<<"deleted: ">>, Path, <<"\n">>]};
+format_rm(Path, true, {0, []}) -> {ok, [<<"force-deleted: ">>, Path]};
+format_rm(_, _, {_, L}) -> {error, bin_join(L, <<"\n">>, [])}.
+
+%%------------------------------------------------------------------------------

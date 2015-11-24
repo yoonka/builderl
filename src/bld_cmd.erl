@@ -24,7 +24,11 @@
 
 -module(bld_cmd).
 
--export([git_branch/1]).
+-export([
+         git_branch/1,
+         git_status/1,
+         rm_rf/1
+        ]).
 
 %%%-----------------------------------------------------------------------------
 %%% Copied from https://github.com/yoonka/yolf.git
@@ -67,13 +71,27 @@ exit_code(Port) ->
 %%% Copied from https://github.com/yoonka/yolf.git
 %%%-----------------------------------------------------------------------------
 
-git_branch(Path) ->
+execute_in(Path, Cmd) ->
     {ok, Cwd} = file:get_cwd(),
     file:set_cwd(filename:join(Cwd, Path)),
-    case cmd(<<"git symbolic-ref -q HEAD">>) of
-        {0, [Res]} ->
-            file:set_cwd(Cwd),
-            {0, lists:last(filename:split(Res))};
-        Err ->
-            Err
+    Res = sh_cmd(Cmd),
+    file:set_cwd(Cwd),
+    Res.
+
+git_branch(Path) ->
+    case execute_in(Path, <<"git symbolic-ref -q HEAD">>) of
+        {0, [Res]} -> {0, lists:last(filename:split(Res))};
+        Err -> Err
     end.
+
+git_status(Path) ->
+    Cmd = << <<"git --git-dir=\"">>/binary, Path/binary,
+             <<"/.git\" --work-tree=\"">>/binary, Path/binary,
+             <<"/\" status --porcelain">>/binary >>,
+    case filelib:is_dir(Path) of
+        false -> false;
+        true -> sh_cmd(Cmd)
+    end.
+
+rm_rf(Path) ->
+    sh_cmd(<< <<"rm -rf \"">>/binary, Path/binary, <<"\"">>/binary >>).
