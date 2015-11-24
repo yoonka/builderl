@@ -269,7 +269,17 @@ format_status(Path, Err) -> {error, format_error(Path, Err)}.
 %%------------------------------------------------------------------------------
 
 execute_get(Path, Tag, Clone) ->
-    io:format("get ~p ~p ~p~n", [Path, Tag, Clone]).
+    execute_get(Path, Tag, Clone, bld_cmd:git_status(Path)).
+
+execute_get(Path, Tag, Clone, false) ->
+    format_get(Path, bld_cmd:git_clone(Path, Tag, Clone));
+execute_get(Path, _, _, {0, []}) ->
+    {error, [<<"already exists, ignoring: ">>, Path, <<"\n">>]};
+execute_get(Path, _, _, Err) ->
+    {error, format_error(Path, Err, [<<"\n---\nnot clean, ignoring...">>])}.
+
+format_get(Path, {0, _}) -> {ok, [<<"cloned: ">>, Path, <<"\n">>]};
+format_get(Path, {_, List}) -> {error, format_error(error, Path, List, [])}.
 
 %%------------------------------------------------------------------------------
 

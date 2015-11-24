@@ -27,6 +27,7 @@
 -export([
          git_branch/1,
          git_status/1,
+         git_clone/3,
          rm_rf/1
         ]).
 
@@ -84,14 +85,21 @@ git_branch(Path) ->
         Err -> Err
     end.
 
+git_cmd(Path, Cmd) ->
+    << <<"git --git-dir=\"">>/binary, Path/binary,
+       <<"/.git\" --work-tree=\"">>/binary, Path/binary,
+       <<"/\" ">>/binary, Cmd/binary >>.
+
 git_status(Path) ->
-    Cmd = << <<"git --git-dir=\"">>/binary, Path/binary,
-             <<"/.git\" --work-tree=\"">>/binary, Path/binary,
-             <<"/\" status --porcelain">>/binary >>,
     case filelib:is_dir(Path) of
         false -> false;
-        true -> sh_cmd(Cmd)
+        true -> sh_cmd(git_cmd(Path, <<"status --porcelain">>))
     end.
+
+git_clone(Path, Tag, Clone) ->
+    Cmd = << <<"git clone -q -b ">>/binary, Tag/binary, <<" ">>/binary,
+             Clone/binary, <<" ">>/binary, Path/binary >>,
+    sh_cmd(Cmd).
 
 rm_rf(Path) ->
     sh_cmd(<< <<"rm -rf \"">>/binary, Path/binary, <<"\"">>/binary >>).
