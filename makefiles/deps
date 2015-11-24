@@ -35,79 +35,21 @@
 ## Or take always the local version (it's known to compile riak_pb properly)
 REBAR=$(shell echo ./rebar)
 
-
-repo_base_url = $(GITURL)
-deps_vsns_dir = deps-versions
-
-ifndef DEPSVSN
-
-curr_branch = $(shell git rev-parse --abbrev-ref HEAD 2> /dev/null)
-
-ifeq ($(curr_branch),)
-
-$(warning Error when checking git branch, using dependencies from 'master'.)
-curr_branch = $(GITMASTER)
-
-else # curr_branch
-
-# Include dependencies for the current branch.
-# If they can't be found, use dependencies for 'develop' if the name
-# of the current branch starts with 'develop'. Otherwise always use
-# dependencies for 'master' (default).
-ifeq ($(wildcard $(deps_vsns_dir)/$(curr_branch)),)
-is_develop = $(shell git rev-parse --abbrev-ref HEAD 2> /dev/null | grep -e ^$(GITDEVELOP))
-ifeq ($(is_develop),)
-curr_branch = $(GITMASTER)
-else
-curr_branch = $(GITDEVELOP)
-endif
-endif
-
-endif # curr_branch
-
-else # DEPSVSN
-
-ifeq ($(wildcard $(deps_vsns_dir)/$(DEPSVSN)),)
-$(error "Dependency version '$(DEPSVSN)' doesn't exist in '$(deps_vsns_dir)'")
-endif
-
-curr_branch = $(DEPSVSN)
-
-endif # DEPSVSN
-
-include $(deps_vsns_dir)/$(curr_branch)
-
-# NOTE: By default includes 'deps-versions/master' unless the current
-#       git branch starts with 'develop', in which case
-#       'deps-versions/develop' will be used.
-#
-#       Use DEPSVSN to specify a particular dependency version, e.g.:
-#
-#       make get-deps DEPSVSN=master-new
 .PHONY: get-deps
 get-deps: $(REBAR)
 	$(REBAR) get-deps
-	@echo
-	@echo ------------------------------------------------------------------------
-	@echo Fetching dependencies for branch \'$(curr_branch)\'
-	@echo ========================================================================
-	@echo
-	for ldep in $(lib_clone_deps); do \
-		(cd lib && git clone $$ldep) ; \
-	done
-	for dep in $(clone_deps); do \
-		git clone $$dep ; \
-	done
+	./bin/deps.esh get
 
 .PHONY: rm-deps
 rm-deps: $(REBAR)
 	$(REBAR) del-deps
-	for ldep in $(lib_rm_deps); do \
-		rm -rf lib/$$ldep ; \
-	done
-	for dep in $(rm_deps); do \
-		rm -rf $$dep ; \
-	done
+	./bin/deps.esh rm
+
+.PHONY: redo-deps
+redo-deps: $(REBAR)
+	$(REBAR) del-deps
+	$(REBAR) get-deps
+	./bin/deps.esh rm get
 
 compile-deps: $(REBAR)
 	$(REBAR) compile
