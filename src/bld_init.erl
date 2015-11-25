@@ -632,7 +632,7 @@ do_install({_Action, Type, Suffix, Seq, Base}, SetupMod, InitConf, RunVars) ->
     Name = get_node_name(Type, Suffix, RunVars),
     KeyReplace = get_key_replace(SetupMod, Base, Name, Offset, RunVars),
     CfgArgs = create_args(Name, Cookie, KeyReplace, InitConf, RunVars),
-    RelDir = init_rel_files(Name, RunVars, CfgArgs),
+    RelDir = init_rel_files(Name, InitConf, RunVars, CfgArgs),
     Privs = process_data_file(RelDir, Base, Type, Name, RunVars, CfgArgs),
     process_app_configs(SetupMod, Privs, Base, CfgArgs),
 
@@ -717,9 +717,10 @@ name_param1(Name, {local, Hostname}, _) ->
 
 %%------------------------------------------------------------------------------
 
-init_rel_files(Name, RunVars, CfgArgs) ->
+init_rel_files(Name, InitConf, RunVars, CfgArgs) ->
     RelDir = proplists:get_value(rel_dir, RunVars),
-    ConfigSrc = filename:join("etc", "sys.config.src"),
+    CfgName = proplists:get_value(sys_config, InitConf, <<"sys.config.src">>),
+    ConfigSrc = filename:join(RelDir, CfgName),
     ConfigDest = filename:join(RelDir, config_name(Name)),
     bld_lib:process_file(ConfigSrc, ConfigDest, CfgArgs, [force]),
     RelDir.

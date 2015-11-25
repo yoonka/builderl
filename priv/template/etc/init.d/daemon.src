@@ -1,0 +1,3 @@
+#!/bin/sh
+#
+# Daemon to Start/Stop the node_package runner

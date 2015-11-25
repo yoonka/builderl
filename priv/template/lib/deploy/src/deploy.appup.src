@@ -1,0 +1,14 @@
+%% -*- mode: erlang -*-
+{"0.0.2",
+ [
+  {"0.0.1",
+   [
+    {load_module, node_config}
+   ]}
+ ],
+ [
+  {"0.0.1",
+   [
+    {load_module, node_config}
+   ]}
+ ]}.

@@ -38,16 +38,9 @@
 ## Project-specific variables and settings (Change where required)
 ##------------------------------------------------------------------------------
 ## Tested version known to compile riak_pb
-# REBARURL   ?= https://github.com/yoonka/erlstrap/wiki/rebar
-## Git repository for dependencies listed in files in deps-versions/
-# GITURL     ?= https://github.com/yoonka
-## The development branch, use dependencies from deps-versions/$GITDEVELOP
-## if the current branch starts with the name of the development branch
-# GITDEVELOP ?= develop
-## Name of the default branch, use dependencies from deps-versions/$GITMASTER
-# GITMASTER  ?= master
+# REBARURL  ?= https://github.com/yoonka/erlstrap/wiki/rebar
 ## Compilation flags
-# ERLCFLAGS  ?= -W -v -pa deps/lager/ebin +debug_info +'{parse_transform, lager_transform}'
+# ERLCFLAGS ?= -W -v -pa deps/lager/ebin +debug_info +'{parse_transform, lager_transform}'
 ##------------------------------------------------------------------------------
 
 ## These are defaults used in GNUmakefileBuilderl, change if needed

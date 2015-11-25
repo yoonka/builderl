@@ -29,9 +29,10 @@
 -export([mk_dev/0, mk_rel/1]).
 
 %% Internal exports
--export([get_reltool_config/0]).
+-export([get_reltool_config/0, config_files/1]).
 
 -define(RELTOOL_CONFIG, "etc/reltool.config").
+-define(SYS_CONFIG_TMPL, "sys.config.src").
 
 %% Location of the vm_local.args file used when starting local VMs
 -define(LOCAL_VM_ARGS, "tmp/vm_local.args").
@@ -62,6 +63,7 @@ mk_dev() ->
     write_start_erl_data(ErtsVsn, Vsn),
     write_build_info(Vsn),
     write_builderl_config(Vsn, BldCfg, LibDirs),
+    link_configs(Vsn, config_files(BldCfg)),
 
     io:format("Finished.~n", []).
 
@@ -81,6 +83,7 @@ mk_rel(BldLink) ->
     RelDir = filename:join("releases", Vsn),
     RelPath = filename:join(?REL_PATH, RelDir),
     bld_lib:cp_file(RelDir, RelPath, ?BUILDERL_CONFIG),
+    cp_configs(RelDir, RelPath, config_files(BldCfg)),
 
     RelFiles = [X ++ ".rel" || X <- RelNames -- get_cmd_rel(BldCfg)],
     Releases = filename:join(?REL_PATH, "releases"),
@@ -320,6 +323,27 @@ get_tuple_list(Key, List) ->
         Val -> [Val]
     end.
 
+%%------------------------------------------------------------------------------
+
+config_files(BldCfg) ->
+    proplists:get_value(config_files, BldCfg, [?SYS_CONFIG_TMPL]).
+
+
+link_configs(RelVsn, CfgFiles) ->
+    lists:foreach(fun(X) -> link_configs1(RelVsn, X) end, CfgFiles).
+
+link_configs1(RelVsn, Name) ->
+    From = filename:join(["releases", RelVsn, Name]),
+    bld_lib:rm_link(From),
+    bld_lib:mk_link(filename:join(["..", "..", "etc", Name]), From).
+
+
+cp_configs(RelDir, RelPath, CfgFiles) ->
+    lists:foreach(fun(X) -> cp_configs1(RelDir, RelPath, X) end, CfgFiles).
+
+cp_configs1(RelDir, RelPath, Name) -> bld_lib:cp_file(RelDir, RelPath, Name).
+
+%%------------------------------------------------------------------------------
 
 link_builderl(LinkPath, RelPath) ->
     Ebin = filename:join(LinkPath, "ebin"),

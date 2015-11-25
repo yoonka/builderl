@@ -1,0 +1,4 @@
+%% -*- erlang -*-
+{"1.0",          "=REPOBASE=/example.git",                 "example"}.
+{"0.0.3",        "https://github.com/yoonka/migresia.git", "migresia"}.
+{".", "develop", "=REPOBASE=/migrations.git",              "migrations"}.
