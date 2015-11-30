@@ -26,7 +26,21 @@
 
 -export([boot/3, current_app_vsn/1]).
 
+-export([
+         builderl/1,
+         update_root_dir/1,
+         configure/1,
+         mk_dev/1,
+         mk_rel/1,
+         init/1,
+         config/1,
+         start/1,
+         stop/1,
+         deps/1
+        ]).
+
 -include_lib("kernel/include/file.hrl").
+-include("../include/load_builderl.hrl").
 
 -define(BUILDERLAPP, "builderl.app").
 
@@ -47,6 +61,19 @@ current_app_vsn(Path) ->
     File = filename:join(Path, ?BUILDERLAPP),
     [{application, builderl, List}] = bld_lib:consult_app_file(File),
     "builderl-" ++ proplists:get_value(vsn, List).
+
+%%------------------------------------------------------------------------------
+
+builderl(Args)        -> do_builderl(Args).
+update_root_dir(Args) -> bld_cfg:set_root(Args).
+configure(Args)       -> bld_cfg:configure(Args).
+mk_dev([])            -> bld_rel:mk_dev().
+mk_rel([])            -> bld_rel:mk_rel(?BUILDERLLINK).
+init(Args)            -> bld_init:do(Args).
+config(Args)          -> bld_cfg:config(Args).
+start(Args)           -> bld_run:start(Args).
+stop(Args)            -> bld_run:stop(Args).
+deps(Args)            -> bld_deps:start(Args).
 
 %%------------------------------------------------------------------------------
 
@@ -190,3 +217,25 @@ do_load_module(Path, Module) ->
 do_error(Err) ->
     io:format("Error '~p', aborting.~n", [Err]),
     halt(1).
+
+%%------------------------------------------------------------------------------
+
+builderl_usage() ->
+    [
+     "************************************************************************",
+     "Helper command to manage the builderl installation.",
+     "",
+     "Usage:",
+     "  builderl.esh [ -h | --help ]",
+     "",
+     "  -h, --help",
+     "    This help.",
+     "************************************************************************"
+    ].
+
+do_builderl(["-h"]) ->     bld_lib:print(builderl_usage());
+do_builderl(["--help"]) -> bld_lib:print(builderl_usage());
+do_builderl([]) ->         builderl1().
+
+builderl1() ->
+    ok.

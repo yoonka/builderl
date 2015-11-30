@@ -22,11 +22,27 @@
 %% ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
 %% EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
--module(bld_configure).
+-module(bld_cfg).
 
--export([do/1]).
+-include_lib("builderl/include/builderl.hrl").
 
-usage(Allowed) ->
+-export([set_root/1, configure/1, config/1]).
+
+set_root_usage() ->
+    [
+     "************************************************************************",
+     "Updates the ROOTDIR variable in a release created with reltool.",
+     "Please only run in the release folder as it updates files in-place!",
+     "",
+     "Usage:",
+     "  update_root_dir.esh [ -h | --help ]",
+     "",
+     "  -h, --help",
+     "    This help.",
+     "************************************************************************"
+    ].
+
+configure_usage(Allowed) ->
     [
      "************************************************************************",
      "Reconfigures scripts from the node_package repository that are used",
@@ -34,7 +50,7 @@ usage(Allowed) ->
      "See: https://github.com/basho/node_package",
      "",
      "Usage:",
-     "  configure.esh [ -v | -h | --help | [ <type> | <type>-<suffix> ]",
+     "  configure.esh [ -h | --help | [ <type> | <type>-<suffix> ]",
      "  configure.esh [ -n (<type> | <type>-<suffix>) <name> ]",
      "",
      "  -h, --help",
@@ -55,24 +71,92 @@ usage(Allowed) ->
      "************************************************************************"
     ].
 
-do(Args) ->
+config_usage() ->
+    [
+     "************************************************************************",
+     "Updates configuration files of an already installed node.",
+     "",
+     "Usage:",
+     "  config.esh [ -h | --help ]",
+     "",
+     "  -h, --help",
+     "    This help.",
+     "************************************************************************"
+    ].
+
+-define(RELCHECK,
+        [{dir, <<"deps">>},
+         {dir, <<"deps-versions">>},
+         {file, <<"GNUmakefile">>}
+        ]).
+
+set_root(["-h"]) ->     bld_lib:print(set_root_usage());
+set_root(["--help"]) -> bld_lib:print(set_root_usage());
+set_root([]) ->         set_root1().
+
+set_root1() ->
+    check_release(),
+
+    {ok, Root} = file:get_cwd(),
+    io:format(standard_io, "Using '~s' as node root.~n", [Root]),
+
+    %% Should be just one of each type, correct if it has changed
+    [ErlFile] = filelib:wildcard("erts-*/bin/erl"),
+    [StartFile] = filelib:wildcard("erts-*/bin/start"),
+    ToUpdate = ["bin/start", ErlFile, StartFile],
+
+    {ok, RegExp} = re:compile("\s*ROOTDIR=.+$", [multiline]),
+    ToLine = "ROOTDIR=\"" ++ Root ++ "\"",
+    Msg = "~nUpdating in-place!~n~p~nIn files: ~p~n~n",
+    io:format(standard_io, Msg, [ToLine, ToUpdate]),
+    lists:foreach(fun(F) -> update_in_place(F, RegExp, ToLine) end, ToUpdate).
+
+check_release() ->
+    Fun = fun({dir, Dir}) -> filelib:is_dir(Dir);
+             ({file, File}) -> filelib:is_regular(File)
+          end,
+    not lists:all(Fun, ?RELCHECK) orelse bld_lib:print(err1()), halt(1).
+
+err1() ->
+    [
+     "This script updates files in-place and can only be executed in the release folder!.",
+     "Use -h or --help for more options."
+    ].
+
+update_in_place(File, RegExp, Value) ->
+    Data = re:replace(bld_lib:read_data(File), RegExp, Value),
+    io:format(standard_io, "Write file '~s': ", [File]),
+    case file:write_file(File, Data) of
+        ok ->
+            io:format(standard_io, "Done.~n", []);
+        {error, Err} ->
+            io:format(standard_io, "Error:~n~1000p~n", [Err]),
+            halt(1)
+    end.
+
+%%------------------------------------------------------------------------------
+
+configure(Args) ->
     BldConf = bld_lib:read_builderl_config(),
-    do1(Args, BldConf).
+    configure1(Args, BldConf).
 
-do1(["-h"], BldCfg) ->     configure_usage(BldCfg);
-do1(["--help"], BldCfg) -> configure_usage(BldCfg);
-do1(Other, BldCfg) ->      do2(Other, bld_lib:get_params(BldCfg), []).
+configure1(["-h"], BldCfg) ->
+    do_configure_usage(BldCfg);
+configure1(["--help"], BldCfg) ->
+    do_configure_usage(BldCfg);
+configure1(Other, BldCfg) ->
+    configure2(Other, bld_lib:get_params(BldCfg), []).
 
-configure_usage(BldCfg) ->
-    bld_lib:print(usage(bld_lib:get_allowed(BldCfg))).
+do_configure_usage(BldCfg) ->
+    bld_lib:print(configure_usage(bld_lib:get_allowed(BldCfg))).
 
-do2(["-n", Node, Name | T], P, Acc) ->
-    do2(T, P, bld_lib:add_node(Node, Name, P, Acc));
-do2([Node | T], P, Acc) ->
-    do2(T, P, bld_lib:add_node(Node, Node, P, Acc));
-do2([], P, Acc) ->
-    do3(P, ensure_nodes(P, lists:reverse(Acc)));
-do2(Other, _P, _Acc) ->
+configure2(["-n", Node, Name | T], P, Acc) ->
+    configure2(T, P, bld_lib:add_node(Node, Name, P, Acc));
+configure2([Node | T], P, Acc) ->
+    configure2(T, P, bld_lib:add_node(Node, Node, P, Acc));
+configure2([], P, Acc) ->
+    configure3(P, ensure_nodes(P, lists:reverse(Acc)));
+configure2(Other, _P, _Acc) ->
     bld_lib:halt_badarg(Other).
 
 ensure_nodes({_, _, BldCfg} = Params, Options) ->
@@ -84,7 +168,7 @@ ensure_nodes({_, _, BldCfg} = Params, Options) ->
             lists:foldl(Fun, Options, bld_lib:get_default_nodes(BldCfg))
     end.
 
-do3({_, _, BldCfg}, OldOpts) ->
+configure3({_, _, BldCfg}, OldOpts) ->
     Options = [{bld_lib:node_name(T, S, BldCfg), N, D}
                || {node, N, T, S, D} <- OldOpts],
     io:format("Using options: ~p~n", [Options]),
@@ -132,3 +216,12 @@ link_info(Folder, Name) ->
      ++ Name ++ "' to '/etc/init.d/'",
      ""
     ].
+
+%%------------------------------------------------------------------------------
+
+config(["-h"]) ->     bld_lib:print(config_usage());
+config(["--help"]) -> bld_lib:print(config_usage());
+config([]) ->         do_config().
+
+do_config() ->
+    ok.
