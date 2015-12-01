@@ -25,6 +25,7 @@
 -module(bld_lib).
 
 -include_lib("builderl/include/builderl.hrl").
+-include_lib("kernel/include/file.hrl").
 
 -export([
          halt_badarg/1,
@@ -45,7 +46,9 @@
          chmod/2,
          mk_link/2,
          mk_dir/1,
+         rm_file/1,
          rm_link/1,
+         file_type/1,
          ensure_member/2,
          get_rel_dir/0,
          read_builderl_config/0,
@@ -245,6 +248,10 @@ mk_dir(Name) ->
     io:format(standard_io, "Create folder '~s': ", [Name]),
     check_file_op(file:make_dir(Name)).
 
+rm_file(File) ->
+    io:format(standard_io, "Remove file '~s': ", [File]),
+    check_file_op(file:delete(File)).
+
 rm_link(Link) ->
     io:format(standard_io, "Remove link '~s': ", [Link]),
     case file:read_link(Link) of
@@ -258,6 +265,23 @@ rm_link(Link) ->
         {error, Err} ->
             io:format(standard_io, "Error:~n~1000p~n", [Err]),
             halt(1)
+    end.
+
+file_type(Name) ->
+    case file:read_file_info(Name) of
+        {ok, #file_info{type = regular}} -> file_type1(Name);
+        {ok, #file_info{type = Type}}
+          when Type =:= device;
+               Type =:= directory;
+               Type =:= other -> {ok, Type};
+        {error, _} = Err -> Err
+    end.
+
+file_type1(Name) ->
+    case file:read_link(Name) of
+        {ok, _} -> {ok, link};
+        {error, einval} -> {ok, file};
+        {error, _} = Err -> Err
     end.
 
 ensure_member(Elem, List) ->
