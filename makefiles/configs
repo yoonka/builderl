@@ -70,7 +70,7 @@ rel_files: run_reltool
 	cp $(bin_files) $(REL_PATH)/bin
 	mkdir $(REL_PATH)/etc
 	cp etc/*.src etc/init.conf $(REL_PATH)/etc || true
-	cp --no-dereference --preserve=links bin/*.esh $(REL_PATH)/bin
+	rsync -l bin/*.esh $(REL_PATH)/bin
 	cp -r etc/init.d $(REL_PATH)/etc
 	for dep in $(rm_deps); do rsync -r --exclude='.*' $$dep $(REL_PATH)/ ; done
 

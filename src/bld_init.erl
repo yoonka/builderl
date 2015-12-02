@@ -26,7 +26,7 @@
 
 -include_lib("builderl/include/builderl.hrl").
 
--export([do/1, merge_config/2, load_config/1]).
+-export([do/1]).
 
 %% Time to wait for the release cmd to start before starting installation
 -define(TIMEOUT, 15000).
@@ -36,13 +36,6 @@
 
 %% Time to wait for the node to stop after creating the RELEASES file
 -define(REL_STOP_TIMEOUT, 120000).
-
-%% Folder that can be used to load patches to the running system.
-%% Since the script installs OTP releases that should be upgraded using the
-%% OTP release handler, we don't want the patches folder to be per node nor
-%% to be easily accessible to prevent people from using it as a mean to upgrade
-%% nodes. One common patches folder for quick checks should be enough.
--define(PATCHES, <<"/tmp/code_patches">>).
 
 -define(RELCHECK,
         [{dir, <<"lib">>},
@@ -57,8 +50,6 @@
          <<"log">>,
          <<"sasl_logfiles">>,
          <<"shell">>]).
-
--define(DEFAULT_CONF, "local_setup.conf").
 
 usage(DefNodes, DefJoins, Allowed) ->
     [
@@ -206,7 +197,7 @@ joins_to_str([], Acc) ->
 do2(Other, BldConf) ->
     Params = bld_lib:get_params(BldConf),
     Options = add_otp(parse(Other, Params)),
-    kick_off(runtime_variables(BldConf), Options).
+    kick_off(bld_rel:runtime_variables(BldConf), Options).
 
 check_release() ->
     Fun = fun({dir, Dir}) -> filelib:is_dir(Dir);
@@ -367,87 +358,15 @@ select_otp(_, Options) ->
 
 %%------------------------------------------------------------------------------
 
-runtime_variables(BldCfg) ->
-    StartErl = {start_erl, _} = lists:keyfind(start_erl, 1, BldCfg),
-    RelDir = {rel_dir, _} = lists:keyfind(rel_dir, 1, BldCfg),
-    HostName = {hostname, hostname()},
-    IsDevT = {is_dev, IsDev = filelib:is_regular(?BUILD_INFO)},
-    SetupCfg = setup_config(IsDev, lists:keyfind(setup_config, 1, BldCfg)),
-    Nodes = [{{node, T}, {R, N, M, O}} || {node_type, T, R, N, M, O} <- BldCfg],
-    Vars = [StartErl, RelDir, HostName, IsDevT] ++ SetupCfg ++ Nodes,
-    io:format("Using runtime variables:~n~p~n", [Vars]),
-    Vars.
-
-get_release_name(Type, RunVars) ->
-    element(1, proplists:get_value({node, Type}, RunVars)).
-
-get_node_name(Type, RunVars) ->
-    element(2, proplists:get_value({node, Type}, RunVars)).
-
-get_node_name(Type, Suffix, RunVars) ->
-    bld_lib:node_name(get_node_name(Type, RunVars), Suffix).
-
-get_config_module(Type, RunVars) ->
-    element(3, proplists:get_value({node, Type}, RunVars)).
-
-%% Constant offset to add to the port number to ensure ports are unique.
-%% When installing more nodes of the same type the port number
-%% is the offset plus the sequential number starting from 0 for the given type
-%% and in the order in which nodes were specified in the command line.
-%% Increase the gap if installing more than 10 nodes of the same type.
-get_port_offset(Type, RunVars) ->
-    element(4, proplists:get_value({node, Type}, RunVars)).
-
-setup_config(_IsDev, false) ->
-    [];
-setup_config(IsDev, {setup_config, Rel, Dir, App, Vsn, Mod}) ->
-    Cfg = add_setup_app(add_setup_rel(Rel), App),
-    add_setup_module(Cfg, IsDev, Dir, App, Vsn, Mod).
-
-add_setup_rel(undefined) -> [];
-add_setup_rel(Rel) -> [{setup_release, Rel}].
-
-add_setup_app(L, undefined) -> L;
-add_setup_app(L, App) -> [{setup_app, App} | L].
-
-add_setup_module(L, _IsDev, _Dir, App, _Vsn, Mod)
-  when App == undefined orelse Mod == undefined -> L;
-add_setup_module(L, IsDev, Dir, App, Vsn, Mod) ->
-    Path = setup_path(IsDev, Dir, App, Vsn),
-    code:add_path(Path),
-    [{setup_module, Mod} | L].
-
-setup_path(true, Dir, App, _Vsn) ->
-    filename:join([Dir, App, "ebin"]);
-setup_path(false, _Dir, App, Vsn) ->
-    filename:join(["lib", atom_to_list(App) ++ "-" ++ Vsn, "ebin"]).
-
-hostname() ->
-    {ok, Hostname} = inet:gethostname(),
-    {ok, {hostent, Fqdn, _, _, _, _}} = inet:gethostbyname(Hostname),
-    case is_fqdn(Hostname, Fqdn, string:chr(Fqdn, $.)) of
-        false -> {local, Hostname};
-        true -> {fqdn, Fqdn}
-    end.
-
-is_fqdn(_Host, _Fqdn, 0) -> false;
-is_fqdn(_, undefined, _) -> false;
-is_fqdn(Host, Fqdn, Idx) -> is_fqdn(Host, string:sub_string(Fqdn, 1, Idx - 1)).
-
-is_fqdn(Hostname, Hostname) -> true;
-is_fqdn(_, _) -> false.
-
-%%------------------------------------------------------------------------------
-
 kick_off(RunVars, Options) ->
     Nodes = [{A, T, S, Seq, D} || {node, A, T, S, Seq, D} <- Options],
-    Names = [{get_node_name(T, S, RunVars), Dir}
+    Names = [{bld_rel:get_node_name(T, S, RunVars), Dir}
              || {_A, T, S, _Seq, Dir} <- Nodes],
     Clusters = [J || {join, J} <- Options],
     check_joins(Clusters, Options),
 
     io:format("~nUsing options:~n~p~n", [Options]),
-    InitConf = read_config(proplists:get_value(config, Options)),
+    InitConf = bld_cfg:read_config(proplists:get_value(config, Options)),
     io:format("~nInitConf merged:~n~p~n", [InitConf]),
     check_not_running([Node || {Node, _Dir} <- Names]),
 
@@ -495,85 +414,6 @@ err4(Node) ->
      "it's name.",
      "Use -h or --help for more information about options."
     ].
-
-%%------------------------------------------------------------------------------
-
-read_config(Config) ->
-    File = filename:join("etc", "init.conf"),
-    io:format(standard_io, "~nTrying to read '~s': ", [File]),
-    read_config(Config, file:consult(File)).
-
-read_config(undefined, {error, Err}) ->
-    io:format(standard_io, "Unsuccessful: ~p, skipping...~n", [Err]),
-    [];
-read_config(undefined, {ok, InitConf}) ->
-    io:format(standard_io, "Successful.~n", []),
-    try_host_config(InitConf);
-read_config(Config, {error, Err}) ->
-    io:format(standard_io, "Error: ~p~n", [Err]),
-    Msg = "Can not read the specified config section '~s' due to the error.~n"
-        ++ "Aborting.~n",
-    io:format(standard_error, Msg, [Config]),
-    halt(1);
-read_config(Config, {ok, InitConf}) ->
-    io:format(standard_io, "Successful.~n", []),
-    merge_config(default_config(InitConf), custom_config(Config, InitConf)).
-
-try_host_config(InitConf) ->
-    Default = default_config(InitConf),
-    case os:getenv("HOSTNAME") of
-        false ->
-            Default;
-        Found ->
-            Msg = "Trying to read config section for HOSTNAME '~s': ",
-            io:format(standard_io, Msg, [Found]),
-            merge_config(Default, host_config(Found, InitConf))
-    end.
-
-default_config(InitConf) ->
-    proplists:get_value(default, InitConf, []).
-
-custom_config(Config, InitConf) ->
-    case catch list_to_existing_atom(Config) of
-        {'EXIT', _} -> custom_config1(Config, undefined);
-        Atom -> custom_config1(Config, proplists:get_value(Atom, InitConf))
-    end.
-
-custom_config1(Config, undefined) ->
-    io:format(standard_io, "Error!~n", []),
-    Msg = "Can not read the configuration section '~s', aborting.~n",
-    io:format(standard_error, Msg, [Config]),
-    halt(1);
-custom_config1(_Config, CfgList) ->
-    CfgList.
-
-host_config(Config, InitConf) ->
-    case catch list_to_existing_atom(Config) of
-        {'EXIT', _} -> host_config1(undefined);
-        Atom -> host_config1(proplists:get_value(Atom, InitConf))
-    end.
-
-host_config1(undefined) ->
-    io:format(standard_io, "Not found, skipping...~n", []),
-    [];
-host_config1(CfgList) ->
-    io:format(standard_io, "Successful.~n", []),
-    CfgList.
-
-
-merge_config(BaseCfg, [{Key, Val} = Elem | T]) when is_list(BaseCfg) ->
-    case proplists:lookup(Key, BaseCfg) of
-        none ->
-            merge_config([Elem | BaseCfg], T);
-        {Key, OrgVal} ->
-            NewElem = {Key, merge_config(OrgVal, Val)},
-            NewCfg = lists:keyreplace(Key, 1, BaseCfg, NewElem),
-            merge_config(NewCfg, T)
-    end;
-merge_config(BaseCfg, []) ->
-    BaseCfg;
-merge_config(_OldElem, NewElem) ->
-    NewElem.
 
 %%------------------------------------------------------------------------------
 
@@ -627,11 +467,9 @@ do_install({_Action, Type, Suffix, Seq, Base}, SetupMod, InitConf, RunVars) ->
     io:format(standard_io, "Installing in '" ++ Base ++ "'.~n", []),
     bld_lib:mk_dir(Base),
     do_subfolders(SetupMod, Base),
-    Cookie = install_cookie(Type, Base, RunVars),
-    Offset = get_port_offset(Type, RunVars) + Seq,
-    Name = get_node_name(Type, Suffix, RunVars),
-    KeyReplace = get_key_replace(SetupMod, Base, Name, Offset, RunVars),
-    CfgArgs = create_args(Name, Cookie, KeyReplace, InitConf, RunVars),
+    install_cookie(Type, Base, RunVars),
+    CfgArgs = bld_cfg:create_args(Type, Suffix, Seq, Base, InitConf, RunVars),
+    Name = bld_rel:get_node_name(Type, Suffix, RunVars),
     RelDir = init_rel_files(Name, InitConf, RunVars, CfgArgs),
     Privs = process_data_file(RelDir, Base, Type, Name, RunVars, CfgArgs),
     process_app_configs(SetupMod, Privs, Base, CfgArgs),
@@ -651,69 +489,11 @@ get_subfolders(Mod) ->
     {ok, Folders} = Mod:subfolders(),
     Folders.
 
-
 install_cookie(Type, Base, RunVars) ->
     File = filename:join(Base, ".erlang.cookie"),
-    Cookie = get_node_name(Type, RunVars) ++ "_cookie",
+    Cookie = bld_rel:get_cookie(Type, RunVars),
     io:format(standard_io, "Write cookie '~s': ", [File]),
-    bld_lib:check_file_op(file:write_file(File, Cookie ++ "\n")),
-    Cookie.
-
-
-get_key_replace(undefined, _Base, _Name, _Offset, _RunVars) ->
-    [];
-get_key_replace(Mod, Base, Name, Offset, RunVars) ->
-    {ok, Vars} = Mod:key_replace(Base, Name, Offset, RunVars),
-    Vars.
-
-
-create_args(Name, Cookie, KeyReplace, InitConf, RunVars) ->
-    Hostname = proplists:get_value(hostname, RunVars),
-
-    Default =
-        [
-         {<<"=NODE=">>, Name, [global]},
-         {<<"=NAMEATHOST=">>, Name ++ "@" ++ get_host(Hostname)},
-         {<<"=COOKIE=">>, Cookie},
-         {<<"=NAMEPARAM=">>, name_param(Name, Hostname, InitConf)},
-         %% Used in node_package scripts
-         {<<"{{node}}">>, Name, [global]},
-         {<<"{{runner_user}}">>, bld_lib:trim(os:cmd("whoami"))},
-         {<<"{{runner_wait_process}}">>, <<"mnesia_sup">>},
-         {<<"{{runner_ulimit_warn}}">>, <<"">>},
-         {<<"{{runner_patch_dir}}">>, ?PATCHES},
-         {<<"{{runner_release}}">>, Name},
-         {<<"{{runner_script_dir}}">>,
-          <<"\"$( cd \"$(dirname \"$0\")\" ; pwd -L )\"">>},
-         {<<"{{runner_base_dir}}">>, <<"{{abs_code_root}}">>},
-         {<<"{{runner_etc_dir}}">>, <<"{{abs_node_root}}/etc">>},
-         {<<"{{runner_log_dir}}">>, <<"{{abs_node_root}}/log">>},
-         {<<"{{runner_lib_dir}}">>, <<"{{abs_code_root}}/lib">>}
-         %% Only used in node_package version 2.0.0 or later
-         %% {<<"{{numactl_arg}}">>, <<"">>},
-         %% {<<"{{cuttlefish}}">>, <<"">>},
-         %% {<<"{{cuttlefish_conf}}">>, <<"void_cuttlefish.conf">>, [global]},
-         %% {<<"{{platform_data_dir}}">>, <<"void_cuttlefish_data_dir">>}
-        ] ++ KeyReplace,
-
-    CfgReplace = proplists:get_value(setup_key_replace, InitConf, []),
-    merge_config(Default, CfgReplace).
-
-
-get_host({local, Hostname}) -> Hostname;
-get_host({fqdn, Hostname}) -> string:sub_word(Hostname, 1, $.).
-
-
-name_param(Name, Hostname, InitConf) ->
-    Opts = proplists:get_value(options, InitConf, []),
-    name_param1(Name, Hostname, lists:member(force_sname, Opts)).
-
-name_param1(Name, {fqdn, _} = Hostname, true) ->
-    "-sname " ++ Name ++ "@" ++ get_host(Hostname);
-name_param1(Name, {fqdn, Hostname}, false) ->
-    "-name " ++ Name ++ "@" ++ Hostname;
-name_param1(Name, {local, Hostname}, _) ->
-    "-sname " ++ Name ++ "@" ++ Hostname.
+    bld_lib:check_file_op(file:write_file(File, Cookie ++ "\n")).
 
 %%------------------------------------------------------------------------------
 
@@ -730,7 +510,7 @@ config_name(Name) -> Name ++ ".config".
 %%------------------------------------------------------------------------------
 
 process_data_file(RelDir, Base, Type, Name, RunVars, CfgArgs) ->
-    RelName = get_release_name(Type, RunVars),
+    RelName = bld_rel:get_release_name(Type, RunVars),
     Path = erl_path(proplists:get_value(is_dev, RunVars)),
     StartFile = Name ++ start_file_ext(),
     create_start_script(Path, Base, RelName, Name, "vm.args", StartFile),
@@ -984,7 +764,9 @@ install_known([], _Names, _Clusters, _Known, _InitConf, _RunVars) ->
 install_known(Installs, Names, OldClusters, Known, InitConf, RunVars) ->
     io:format(standard_io, "~n => Installing nodes...~n", []),
 
-    AddMod = fun({R, T, S}) -> {R, T, S, get_config_module(T, RunVars)} end,
+    AddMod = fun({R, T, S}) ->
+                     {R, T, S, bld_rel:get_config_module(T, RunVars)}
+             end,
     AllToSetup = [AddMod(X) || X <- Installs],
     FilterFun = fun({_R, T, S, _M}) -> not lists:member({T, S}, Known) end,
     NotInJoins = lists:filter(FilterFun, AllToSetup),
@@ -1084,7 +866,7 @@ install_otp(Installs, RunVars, Options) ->
 install_otp(_Installs, _RunVars, _Options, false) ->
     ok;
 install_otp(Installs, RunVars, Options, {_, Type, Suffix}) ->
-    Name = get_node_name(Type, Suffix, RunVars),
+    Name = bld_rel:get_node_name(Type, Suffix, RunVars),
     bld_lib:h_line("~n---" ++ Name),
     io:format(standard_io, "Preparing for OTP upgrades...~n~n", []),
 
@@ -1113,7 +895,7 @@ mk_otp_links(Type, Name, RunVars) ->
     bld_lib:rm_link(ConfigLnk),
     bld_lib:rm_link(BootLnk),
 
-    RelName = get_release_name(Type, RunVars),
+    RelName = bld_rel:get_release_name(Type, RunVars),
     bld_lib:mk_link(config_name(Name), ConfigLnk),
     bld_lib:mk_link(RelName ++ ".boot", BootLnk).
 
@@ -1140,16 +922,3 @@ halt_cannot_stop(Remote) ->
     Msg = "Error, node '~p' didn't stop, can't continue, aborting.~n",
     io:format(standard_error, Msg, [Remote]),
     halt(1).
-
-%%------------------------------------------------------------------------------
-
-load_config(SetupCfg) ->
-    Name = proplists:get_value(default_config, SetupCfg, ?DEFAULT_CONF),
-    SetupApp = proplists:get_value(setup_app, SetupCfg),
-    File = filename:join(code:priv_dir(SetupApp), Name),
-
-    io:format("Using configuration file: ~p~n", [File]),
-    {ok, Config} = file:consult(File),
-    Replace = proplists:get_value(install_key_replace, SetupCfg, []),
-    io:format("But replacing the following keys:~n~p~n", [Replace]),
-    merge_config(Config, Replace).

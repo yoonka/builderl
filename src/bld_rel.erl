@@ -29,7 +29,15 @@
 -export([mk_dev/0, mk_rel/1]).
 
 %% Internal exports
--export([get_reltool_config/0, config_files/1]).
+-export([
+         get_reltool_config/0,
+         runtime_variables/1,
+         get_release_name/2,
+         get_node_name/3,
+         get_config_module/2,
+         get_port_offset/2,
+         get_cookie/2
+        ]).
 
 -define(RELTOOL_CONFIG, "etc/reltool.config").
 -define(SYS_CONFIG_TMPL, "sys.config.src").
@@ -349,3 +357,79 @@ link_builderl(LinkPath, RelPath) ->
     Ebin = filename:join(LinkPath, "ebin"),
     To = filename:join(["..", "lib", bld_load:current_app_vsn(Ebin)]),
     bld_lib:mk_link(To, filename:join(RelPath, LinkPath)).
+
+%%------------------------------------------------------------------------------
+
+runtime_variables(BldCfg) ->
+    StartErl = {start_erl, _} = lists:keyfind(start_erl, 1, BldCfg),
+    RelDir = {rel_dir, _} = lists:keyfind(rel_dir, 1, BldCfg),
+    HostName = {hostname, hostname()},
+    IsDevT = {is_dev, IsDev = filelib:is_regular(?BUILD_INFO)},
+    SetupCfg = setup_config(IsDev, lists:keyfind(setup_config, 1, BldCfg)),
+    Nodes = [{{node, T}, {R, N, M, O}} || {node_type, T, R, N, M, O} <- BldCfg],
+    Vars = [StartErl, RelDir, HostName, IsDevT] ++ SetupCfg ++ Nodes,
+    io:format("Using runtime variables:~n~p~n", [Vars]),
+    Vars.
+
+get_release_name(Type, RunVars) ->
+    element(1, proplists:get_value({node, Type}, RunVars)).
+
+get_node_name(Type, RunVars) ->
+    element(2, proplists:get_value({node, Type}, RunVars)).
+
+get_node_name(Type, Suffix, RunVars) ->
+    bld_lib:node_name(get_node_name(Type, RunVars), Suffix).
+
+get_config_module(Type, RunVars) ->
+    element(3, proplists:get_value({node, Type}, RunVars)).
+
+%% Constant offset to add to the port number to ensure ports are unique.
+%% When installing more nodes of the same type the port number
+%% is the offset plus the sequential number starting from 0 for the given type
+%% and in the order in which nodes were specified in the command line.
+%% Increase the gap if installing more than 10 nodes of the same type.
+get_port_offset(Type, RunVars) ->
+    element(4, proplists:get_value({node, Type}, RunVars)).
+
+get_cookie(Type, RunVars) ->
+    get_node_name(Type, RunVars) ++ "_cookie".
+
+
+setup_config(_IsDev, false) ->
+    [];
+setup_config(IsDev, {setup_config, Rel, Dir, App, Vsn, Mod}) ->
+    Cfg = add_setup_app(add_setup_rel(Rel), App),
+    add_setup_module(Cfg, IsDev, Dir, App, Vsn, Mod).
+
+add_setup_rel(undefined) -> [];
+add_setup_rel(Rel) -> [{setup_release, Rel}].
+
+add_setup_app(L, undefined) -> L;
+add_setup_app(L, App) -> [{setup_app, App} | L].
+
+add_setup_module(L, _IsDev, _Dir, App, _Vsn, Mod)
+  when App == undefined orelse Mod == undefined -> L;
+add_setup_module(L, IsDev, Dir, App, Vsn, Mod) ->
+    Path = setup_path(IsDev, Dir, App, Vsn),
+    code:add_path(Path),
+    [{setup_module, Mod} | L].
+
+setup_path(true, Dir, App, _Vsn) ->
+    filename:join([Dir, App, "ebin"]);
+setup_path(false, _Dir, App, Vsn) ->
+    filename:join(["lib", atom_to_list(App) ++ "-" ++ Vsn, "ebin"]).
+
+hostname() ->
+    {ok, Hostname} = inet:gethostname(),
+    {ok, {hostent, Fqdn, _, _, _, _}} = inet:gethostbyname(Hostname),
+    case is_fqdn(Hostname, Fqdn, string:chr(Fqdn, $.)) of
+        false -> {local, Hostname};
+        true -> {fqdn, Fqdn}
+    end.
+
+is_fqdn(_Host, _Fqdn, 0) -> false;
+is_fqdn(_, undefined, _) -> false;
+is_fqdn(Host, Fqdn, Idx) -> is_fqdn(Host, string:sub_string(Fqdn, 1, Idx - 1)).
+
+is_fqdn(Hostname, Hostname) -> true;
+is_fqdn(_, _) -> false.

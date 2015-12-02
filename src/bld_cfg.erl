@@ -28,6 +28,10 @@
 
 -export([set_root/1, configure/1, config/1]).
 
+-export([load_config/1, read_config/1, create_args/6]).
+
+-define(DEFAULT_CONF, "local_setup.conf").
+
 set_root_usage() ->
     [
      "************************************************************************",
@@ -74,7 +78,7 @@ configure_usage(Allowed) ->
 config_usage() ->
     [
      "************************************************************************",
-     "Updates configuration files of an already installed node.",
+     "Updates configuration files on an already installed node.",
      "",
      "Usage:",
      "  config.esh [ -h | --help ]",
@@ -225,3 +229,154 @@ config([]) ->         do_config().
 
 do_config() ->
     ok.
+
+%%------------------------------------------------------------------------------
+
+load_config(SetupCfg) ->
+    Name = proplists:get_value(default_config, SetupCfg, ?DEFAULT_CONF),
+    SetupApp = proplists:get_value(setup_app, SetupCfg),
+    File = filename:join(code:priv_dir(SetupApp), Name),
+
+    io:format("Using configuration file: ~p~n", [File]),
+    {ok, Config} = file:consult(File),
+    Replace = proplists:get_value(install_key_replace, SetupCfg, []),
+    io:format("But replacing the following keys:~n~p~n", [Replace]),
+    merge_config(Config, Replace).
+
+%%------------------------------------------------------------------------------
+
+read_config(Config) ->
+    File = filename:join("etc", "init.conf"),
+    io:format(standard_io, "~nTrying to read '~s': ", [File]),
+    read_config(Config, file:consult(File)).
+
+read_config(undefined, {error, Err}) ->
+    io:format(standard_io, "Unsuccessful: ~p, skipping...~n", [Err]),
+    [];
+read_config(undefined, {ok, InitConf}) ->
+    io:format(standard_io, "Successful.~n", []),
+    try_host_config(InitConf);
+read_config(Config, {error, Err}) ->
+    io:format(standard_io, "Error: ~p~n", [Err]),
+    Msg = "Can not read the specified config section '~s' due to the error.~n"
+        ++ "Aborting.~n",
+    io:format(standard_error, Msg, [Config]),
+    halt(1);
+read_config(Config, {ok, InitConf}) ->
+    io:format(standard_io, "Successful.~n", []),
+    merge_config(default_config(InitConf), custom_config(Config, InitConf)).
+
+try_host_config(InitConf) ->
+    Default = default_config(InitConf),
+    case os:getenv("HOSTNAME") of
+        false ->
+            Default;
+        Found ->
+            Msg = "Trying to read config section for HOSTNAME '~s': ",
+            io:format(standard_io, Msg, [Found]),
+            merge_config(Default, host_config(Found, InitConf))
+    end.
+
+default_config(InitConf) ->
+    proplists:get_value(default, InitConf, []).
+
+custom_config(Config, InitConf) ->
+    case catch list_to_existing_atom(Config) of
+        {'EXIT', _} -> custom_config1(Config, undefined);
+        Atom -> custom_config1(Config, proplists:get_value(Atom, InitConf))
+    end.
+
+custom_config1(Config, undefined) ->
+    io:format(standard_io, "Error!~n", []),
+    Msg = "Can not read the configuration section '~s', aborting.~n",
+    io:format(standard_error, Msg, [Config]),
+    halt(1);
+custom_config1(_Config, CfgList) ->
+    CfgList.
+
+host_config(Config, InitConf) ->
+    case catch list_to_existing_atom(Config) of
+        {'EXIT', _} -> host_config1(undefined);
+        Atom -> host_config1(proplists:get_value(Atom, InitConf))
+    end.
+
+host_config1(undefined) ->
+    io:format(standard_io, "Not found, skipping...~n", []),
+    [];
+host_config1(CfgList) ->
+    io:format(standard_io, "Successful.~n", []),
+    CfgList.
+
+
+merge_config(BaseCfg, [{Key, Val} = Elem | T]) when is_list(BaseCfg) ->
+    case proplists:lookup(Key, BaseCfg) of
+        none ->
+            merge_config([Elem | BaseCfg], T);
+        {Key, OrgVal} ->
+            NewElem = {Key, merge_config(OrgVal, Val)},
+            NewCfg = lists:keyreplace(Key, 1, BaseCfg, NewElem),
+            merge_config(NewCfg, T)
+    end;
+merge_config(BaseCfg, []) ->
+    BaseCfg;
+merge_config(_OldElem, NewElem) ->
+    NewElem.
+
+%%------------------------------------------------------------------------------
+
+create_args(Type, Suffix, Seq, Base, InitConf, RunVars) ->
+    Name = bld_rel:get_node_name(Type, Suffix, RunVars),
+    Offset = bld_rel:get_port_offset(Type, RunVars) + Seq,
+    Cookie = bld_rel:get_cookie(Type, RunVars),
+    SetupMod = proplists:get_value(setup_module, RunVars, undefined),
+    Hostname = proplists:get_value(hostname, RunVars),
+    KeyReplace = get_key_replace(SetupMod, Base, Name, Offset, RunVars),
+
+    Default =
+        [
+         {<<"=NODE=">>, Name, [global]},
+         {<<"=NAMEATHOST=">>, Name ++ "@" ++ get_host(Hostname)},
+         {<<"=COOKIE=">>, Cookie},
+         {<<"=NAMEPARAM=">>, name_param(Name, Hostname, InitConf)},
+         %% Used in node_package scripts
+         {<<"{{node}}">>, Name, [global]},
+         {<<"{{runner_user}}">>, bld_lib:trim(os:cmd("whoami"))},
+         {<<"{{runner_wait_process}}">>, <<"mnesia_sup">>},
+         {<<"{{runner_ulimit_warn}}">>, <<"">>},
+         {<<"{{runner_patch_dir}}">>, ?PATCHES},
+         {<<"{{runner_release}}">>, Name},
+         {<<"{{runner_script_dir}}">>,
+          <<"\"$( cd \"$(dirname \"$0\")\" ; pwd -L )\"">>},
+         {<<"{{runner_base_dir}}">>, <<"{{abs_code_root}}">>},
+         {<<"{{runner_etc_dir}}">>, <<"{{abs_node_root}}/etc">>},
+         {<<"{{runner_log_dir}}">>, <<"{{abs_node_root}}/log">>},
+         {<<"{{runner_lib_dir}}">>, <<"{{abs_code_root}}/lib">>}
+         %% Only used in node_package version 2.0.0 or later
+         %% {<<"{{numactl_arg}}">>, <<"">>},
+         %% {<<"{{cuttlefish}}">>, <<"">>},
+         %% {<<"{{cuttlefish_conf}}">>, <<"void_cuttlefish.conf">>, [global]},
+         %% {<<"{{platform_data_dir}}">>, <<"void_cuttlefish_data_dir">>}
+        ] ++ KeyReplace,
+
+    CfgReplace = proplists:get_value(setup_key_replace, InitConf, []),
+    merge_config(Default, CfgReplace).
+
+get_key_replace(undefined, _Base, _Name, _Offset, _RunVars) ->
+    [];
+get_key_replace(Mod, Base, Name, Offset, RunVars) ->
+    {ok, Vars} = Mod:key_replace(Base, Name, Offset, RunVars),
+    Vars.
+
+get_host({local, Hostname}) -> Hostname;
+get_host({fqdn, Hostname}) -> string:sub_word(Hostname, 1, $.).
+
+name_param(Name, Hostname, InitConf) ->
+    Opts = proplists:get_value(options, InitConf, []),
+    name_param1(Name, Hostname, lists:member(force_sname, Opts)).
+
+name_param1(Name, {fqdn, _} = Hostname, true) ->
+    "-sname " ++ Name ++ "@" ++ get_host(Hostname);
+name_param1(Name, {fqdn, Hostname}, false) ->
+    "-name " ++ Name ++ "@" ++ Hostname;
+name_param1(Name, {local, Hostname}, _) ->
+    "-sname " ++ Name ++ "@" ++ Hostname.

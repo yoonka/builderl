@@ -46,7 +46,7 @@
 -define(TEMPLATE_DIR, ["priv", "template"]).
 
 -define(DEL_LINKS, ["config", "configure", "deps", "init", "mk_dev",
-                    "mk_rel", "start", "update_root_dir"]).
+                    "mk_rel", "start", "stop", "update_root_dir"]).
 -define(BLD_LINKS, ?DEL_LINKS).
 
 boot(SrcPath, DstPath, IncPath) ->

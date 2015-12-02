@@ -8,6 +8,6 @@ log(F0, A0) ->
     io:format(F1, A1).
 
 install({_Id, Node}, SetupCfg) ->
-    Config = bld_init:load_config(SetupCfg),
+    Config = bld_cfg:load_config(SetupCfg),
     log("Config file: ~p~n", [Config]),
     ok = mnesia:create_schema([Node]).

@@ -22,6 +22,13 @@
 %% ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
 %% EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+%% Folder that can be used to load patches to the running system.
+%% Since the script installs OTP releases that should be upgraded using the
+%% OTP release handler, we don't want the patches folder to be per node nor
+%% to be easily accessible to prevent people from using it as a mean to upgrade
+%% nodes. One common patches folder for quick checks should be enough.
+-define(PATCHES, <<"/tmp/code_patches">>).
+
 %% Build info to show in the footer
 -define(BUILD_INFO, "tmp/_build_info.tpl").
 
