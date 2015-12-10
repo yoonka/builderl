@@ -119,7 +119,8 @@ check_release() ->
     Fun = fun({dir, Dir}) -> filelib:is_dir(Dir);
              ({file, File}) -> filelib:is_regular(File)
           end,
-    not lists:all(Fun, ?RELCHECK) orelse bld_lib:print(err1()), halt(1).
+    not lists:all(Fun, ?RELCHECK) orelse
+        begin bld_lib:print(err1()), halt(1) end.
 
 err1() ->
     [
