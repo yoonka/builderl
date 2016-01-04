@@ -309,12 +309,14 @@ host_config1(CfgList) ->
     CfgList.
 
 
-merge_config(BaseCfg, [{Key, Val} = Elem | T]) when is_list(BaseCfg) ->
+merge_config(BaseCfg, [Elem | T])
+  when is_tuple(Elem), is_list(BaseCfg) ->
+    Key = element(1, Elem),
     case proplists:lookup(Key, BaseCfg) of
         none ->
             merge_config([Elem | BaseCfg], T);
-        {Key, OrgVal} ->
-            NewElem = {Key, merge_config(OrgVal, Val)},
+        Tuple ->
+            NewElem = merge_tuple(Tuple, Elem),
             NewCfg = lists:keyreplace(Key, 1, BaseCfg, NewElem),
             merge_config(NewCfg, T)
     end;
@@ -322,6 +324,20 @@ merge_config(BaseCfg, []) ->
     BaseCfg;
 merge_config(_OldElem, NewElem) ->
     NewElem.
+
+merge_tuple({Key, Val}, {Key, NVal}) ->
+    {Key, merge_config(Val, NVal)};
+merge_tuple({Key, Val}, {Key, NVal, NOpts}) ->
+    {Key, merge_config(Val, NVal), NOpts};
+merge_tuple({Key, Val, Opts}, {Key, NVal}) ->
+    {Key, merge_config(Val, NVal), Opts};
+merge_tuple({Key, Val, Opts}, {Key, NVal, NOpts}) ->
+    {Key, merge_config(Val, NVal), merge_options(Opts, NOpts)}.
+
+merge_options(Opts, [Opt | T]) ->
+    merge_options(bld_lib:ensure_member(Opt, Opts), T);
+merge_options(Opts, []) ->
+    Opts.
 
 %%------------------------------------------------------------------------------
 
