@@ -70,6 +70,9 @@ usage() ->
      "    variable. The name of that environment variable is read from another",
      "    environment variable: ENV_REPO_BASE. This allows to specify",
      "    different prefix urls for different projects on the same host.",
+     "",
+     "  --verbose",
+     "    Prints out options used when executing the command.",
      "************************************************************************"
     ].
 
@@ -87,6 +90,8 @@ start1(["-u" = Arg, Url|T], Acc) ->
     start1(T, ensure_one(Arg, {url, to_binary(Url)}, Acc));
 start1(["-f"|T], Acc) ->
     start1(T, bld_lib:ensure_member(force, Acc));
+start1(["--verbose" | T], Acc) ->
+    start1(T, [verbose | Acc]);
 start1([Cmd|T], Acc) when Cmd =:= "st"; Cmd =:= "get"; Cmd =:= "rm" ->
     start1(T, [{cmd, list_to_atom(Cmd)}|Acc]);
 start1([], Acc) ->
@@ -95,6 +100,7 @@ start1(Other, _Acc) ->
     bld_lib:halt_badarg(Other).
 
 to_binary(Bin) when is_binary(Bin) -> Bin;
+to_binary(Atom) when is_atom(Atom) -> list_to_binary(atom_to_list(Atom));
 to_binary(List) -> list_to_binary(List).
 
 ensure_one(Arg, Tuple, Acc) ->
@@ -114,12 +120,12 @@ ensure_url(Options) ->
         false -> add_url(Options)
     end.
 
-add_url(Options) ->
-    File = bld_rel:get_reltool_config(),
-    Config = proplists:get_value(builderl, File),
+add_url(OrgOptions) ->
+    {Options, Config} = get_builderl_cfg(OrgOptions),
     EnvRepoBase = proplists:get_value(env_repo_base, Config),
     RepoBase = proplists:get_value(default_repo_base, Config),
-    Dummy = "default_repo_base not set in builderl config section!!!",
+    Dummy = "default_repo_base not set in the builderl config section "
+        "in etc/reltool.config!!!",
     case {RepoBase, EnvRepoBase =/= undefined andalso os:getenv(EnvRepoBase)} of
         {undefined, false} -> add_url(Dummy, Options);
         {_, false} -> add_url(RepoBase, Options);
@@ -128,15 +134,28 @@ add_url(Options) ->
 
 add_url(RepoBase, Options) -> [{url, to_binary(RepoBase)}|Options].
 
+get_builderl_cfg(Options) ->
+    case proplists:get_value(builderl_cfg, Options) of
+        undefined ->
+            File = bld_rel:get_reltool_config(),
+            Config = proplists:get_value(builderl, File),
+            {[{builderl_cfg, Config} | Options], Config};
+        Config ->
+            {Options, Config}
+    end.
+
 %%------------------------------------------------------------------------------
 
-do_start(Options) ->
+do_start(OrgOptions) ->
     bld_cmd:is_cmd(<<"git">>) orelse halt_no_git(),
-    length([X || {cmd, X} <- Options]) > 0 orelse halt_no_cmd(),
-    io:format("Using options: ~p~n~n", [Options]),
+    length([X || {cmd, X} <- OrgOptions]) > 0 orelse halt_no_cmd(),
+    not lists:member(verbose, OrgOptions) orelse
+        io:format("Using options: ~p~n~n", [OrgOptions]),
 
-    Default = proplists:get_value(default_branch, Options),
-    DepsOrg = read_deps(Default, proplists:get_value(branch, Options)),
+    Default = proplists:get_value(default_branch, OrgOptions),
+    Branch = proplists:get_value(branch, OrgOptions),
+    {Options, DepsOrg} = read_deps(Default, Branch, OrgOptions),
+
     Force = lists:member(force, Options),
     Url = proplists:get_value(url, Options),
     Cmds = [X || {cmd, X} <- Options],
@@ -170,27 +189,39 @@ err_nocmd() ->
      "Use -h or --help for more information about options."
     ].
 
-read_deps(Default, undefined) ->
+read_deps(Default, undefined, Options) ->
     case {bld_cmd:git_branch(<<".">>), Default} of
-        {{0, Branch}, _} -> read_deps_file1(Branch);
-        {_, undefined} -> halt_no_branch();
-        {_, Branch} -> read_deps_file2(Branch)
+        {{0, Branch}, _} -> {Options, read_deps_file1(Branch)};
+        {_, undefined} -> try_default_branch(Options);
+        {_, Branch} -> {Options, read_deps_file2(Branch)}
     end;
-read_deps(_, Force) ->
-    read_deps_file3(Force).
+read_deps(_, Force, Options) ->
+    {Options, read_deps_file4(Force)}.
 
 read_deps_file1(Branch) ->
     bld_lib:h_line("===" ++ binary_to_list(Branch), $=),
     read_deps_file(Branch).
 
 read_deps_file2(Branch) ->
-    bld_lib:h_line("=== invalid branch, using: "
+    bld_lib:h_line("=== invalid branch, using provided: "
                    ++ binary_to_list(Branch) ++ " ", $=),
     read_deps_file(Branch).
 
 read_deps_file3(Branch) ->
+    bld_lib:h_line("=== invalid branch, using default: "
+                   ++ binary_to_list(Branch) ++ " ", $=),
+    read_deps_file(Branch).
+
+read_deps_file4(Branch) ->
     bld_lib:h_line("=== force-using: " ++ binary_to_list(Branch) ++ " ", $=),
     read_deps_file(Branch).
+
+try_default_branch(OrgOptions) ->
+    {Options, Config} = get_builderl_cfg(OrgOptions),
+    case proplists:get_value(default_branch, Config) of
+        undefined -> halt_no_branch();
+        Branch -> {Options, read_deps_file3(to_binary(Branch))}
+    end.
 
 read_deps_file(Branch) ->
     DepsFile = filename:join(?DEPSDIR, Branch),
@@ -223,7 +254,11 @@ halt_no_branch() -> bld_lib:print(err_nobranch()), halt(1).
 err_nobranch() ->
     [
      "Error, couldn't determine git branch in the current directory",
-     "and the default branch hasn't been specified. Aborting..."
+     "and the default branch hasn't been specified. Please add the default",
+     "branch to the builderl config section in etc/reltool.config, e.g.:",
+     "{default_branch, \"master\"},",
+     "or specify the branch with either -b or -d options.",
+     "Use -h or --help for more information about options."
     ].
 
 %%------------------------------------------------------------------------------

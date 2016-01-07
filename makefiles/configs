@@ -72,7 +72,8 @@ rel_files: run_reltool
 	cp etc/*.src etc/init.conf $(REL_PATH)/etc || true
 	rsync -l bin/*.esh $(REL_PATH)/bin
 	cp -r etc/init.d $(REL_PATH)/etc
-	for dep in $(rm_deps); do rsync -r --exclude='.*' $$dep $(REL_PATH)/ ; done
+	@echo Copying additional folders specified in \$$rel_copy_dirs variable...
+	for dep in $(rel_copy_dirs); do rsync -r --exclude='.*' $$dep $(REL_PATH)/ ; done
 
 tgz_rel_name = $(shell cat $(RELEASE_DATA) 2>/dev/null || echo unknown).tgz
 TAR = $(shell which gtar || which tar)
