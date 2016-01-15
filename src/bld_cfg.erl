@@ -26,7 +26,7 @@
 
 -include_lib("builderl/include/builderl.hrl").
 
--export([set_root/1, configure/1, config/1]).
+-export([set_root/1, configure/1, migresia/1, config/1]).
 
 -export([load_config/1, read_config/1, create_args/6]).
 
@@ -72,6 +72,66 @@ configure_usage(Allowed) ->
      "    instead of using the <type> or <type>-<suffix> it uses the supplied",
      "    <name> as the name of the service and the command to start and",
      "    control the node.",
+     "************************************************************************"
+    ].
+
+migresia_usage() ->
+    [
+     "************************************************************************",
+     "Copies the specified files to the 'migrations' folder replacing",
+     "timestamp '11112233445566' (if found, unless '-f' is specified) with the",
+     "current timestamp.",
+     "",
+     "Options '-i' and '-a' are mutually exclusive with '-d'.",
+     "",
+     "Usage:",
+     "    migresia -h",
+     "    migresia [ -i (<type> | <type>-<suffix>) | -a application ]",
+     "             [ -d directory ] [ -f ] [ --verbose ]",
+     "             --import path1/file1 [ pathX/fileX ]...",
+     "",
+     "  -h",
+     "    This help.",
+     "",
+     "  -i (<type> | <type>-<suffix>)",
+     "    Connects to the specified node to obtain the location of the",
+     "    'migrations' folder. Mutually exclusive with '-d'.",
+     "    This option can be omitted if only one node is configured in the",
+     "    'etc/reltool.config' file, in which case that node will be used.",
+     "",
+     "  -a application",
+     "    Obtains the 'migrations' folder for the specified application.",
+     "    If not provided then the folder specified by the 'rel_relative_dir'",
+     "    migresia application configuration option will be returned.",
+     "",
+     "  -d directory",
+     "    Location of the 'migrations' folder relative to the folder",
+     "    containing the release. Mutually exclusive with '-i' and '-a'.",
+     "",
+     "  --import path1/file1 [ pathX/fileX ]",
+     "    Copies the specified list of files to the 'migrations' folder",
+     "    replacing timestamp '11112233445566' (or any timestamp if '-f' is",
+     "    specified) with the current timestamp.",
+     "",
+     "    The timestamp will be updated if the file name matches one of the",
+     "    following formats (where _any_description is any text consisting of",
+     "    characters valid in Erlang module names):",
+     "      11112233445566.erl",
+     "      11112233445566_any_description.erl",
+     "",
+     "    Any other file or a file with a different timestamp will be copied",
+     "    without any modifictions (unless '-f' is provided). The location of",
+     "    the 'migrations' folder is obtained from the running node, or from",
+     "    the '-d' option if provided.",
+     "",
+     "  -f",
+     "    Replaces the timestamp even if it doesn't match the specific number",
+     "    11112233445566. In this case a sequence of 14 digits followed by",
+     "    '.erl' or '_any_description.erl' will be treated as the timestamp to",
+     "    replace (see option '--import' for more details).",
+     "",
+     "  --verbose",
+     "    Prints out options used when executing the command.",
      "************************************************************************"
     ].
 
@@ -221,6 +281,179 @@ link_info(Folder, Name) ->
      ++ Name ++ "' to '/etc/init.d/'",
      ""
     ].
+
+%%------------------------------------------------------------------------------
+
+migresia(["-h"]) ->
+    bld_lib:print(migresia_usage());
+migresia(Other) ->
+    {Opts, F} = parse_migresia(Other, none, {[], []}),
+
+    proplists:get_value(verbose, Opts) =:= undefined orelse
+        io:format("~nUsing options:~n~p~n~n", [[{files, F} | Opts]]),
+
+    Node = proplists:get_value(node, Opts),
+    App  = proplists:get_value(app, Opts),
+    Dir  = proplists:get_value(dir, Opts),
+
+    F =/= [] orelse begin bld_lib:print(err_nofiles()), halt(1) end,
+    Names = lists:map(fun(X) -> process_name(X) end, F),
+
+    D = get_migresia_folder(Dir, Node, App),
+    Ts = current_ts(),
+    Force = proplists:get_value(force, Opts, false),
+    lists:foreach(fun(X) -> copy_file(X, Force, Ts, D) end, Names),
+    io:format("Done.~n", []).
+
+err_nofiles() ->
+    [
+     "Error, no files have been specified. Please use '--import' to provide",
+     "the list of files to copy to the 'migrations' folder.",
+     "Use -h or --help for more information about options."
+    ].
+
+parse_migresia(["-i", Node | Rest], _, {Opts, F}) ->
+    ensure_one("-i", node, Opts),
+    parse_migresia(Rest, none, {[{node, Node} | Opts], F});
+parse_migresia(["-a", App | Rest], _, {Opts, F}) ->
+    ensure_one("-a", app, Opts),
+    parse_migresia(Rest, none, {[{app, App} | Opts], F});
+parse_migresia(["-d", Dir | Rest], _, {Opts, F}) ->
+    ensure_one("-d", dir, Opts),
+    parse_migresia(Rest, none, {[{dir, list_to_binary(Dir)} | Opts], F});
+parse_migresia(["-f" | Rest], _, {Opts, F}) ->
+    parse_migresia(Rest, none, {bld_lib:ensure_member(force, Opts), F});
+parse_migresia(["--verbose" | Rest], _, {Opts, F}) ->
+    parse_migresia(Rest, none, {bld_lib:ensure_member(verbose, Opts), F});
+parse_migresia(["--import" | Rest], none, {Opts, []}) ->
+    parse_migresia(Rest, is_import, {Opts, []});
+parse_migresia(["--import" | _], _, _) ->
+    bld_lib:halt_toomany("--import");
+parse_migresia([File | Rest], is_import, {Opts, Acc}) ->
+    parse_migresia(Rest, is_import, {Opts, [File | Acc]});
+parse_migresia([], _, {Opts, Acc}) ->
+    {Opts, lists:reverse(Acc)};
+parse_migresia(Other, _, _) ->
+    bld_lib:halt_badarg(Other).
+
+ensure_one(Option, Name, Opts) ->
+    proplists:get_value(Name, Opts) =:= undefined
+        orelse bld_lib:halt_toomany(Option).
+
+current_ts() ->
+    {{Year, Month, Day}, {Hour, Minute, Second}} = calendar:local_time(),
+    Args = [Year, Month, Day, Hour, Minute, Second],
+    Name = "~w~2.2.0w~2.2.0w~2.2.0w~2.2.0w~2.2.0w",
+    list_to_binary(lists:flatten(io_lib:format(Name, Args))).
+
+process_name(X) ->
+    filelib:is_regular(X) orelse
+        begin bld_lib:print(err_nofile(X)), halt(1) end,
+    Y = list_to_binary(X),
+    {Y, filename:basename(Y)}.
+
+err_nofile(X) ->
+    ["Error, file '" ++ X ++ "' doesn't exist or is not a regular file.",
+     "Aborting."].
+
+get_migresia_folder(undefined, Node, App) ->
+    BldCfg = bld_lib:read_builderl_config(),
+    get_migresia_folder1(Node, App, BldCfg);
+get_migresia_folder(Dir, undefined, undefined) ->
+    filelib:is_dir(Dir) orelse begin bld_lib:print(err_nodir(Dir)), halt(1) end,
+    Dir;
+get_migresia_folder(_, _, _) ->
+    bld_lib:print(err_exclusive()), halt(1).
+
+err_nodir(Dir) ->
+    ["Error, the specified directory '" ++
+         binary_to_list(Dir) ++ "' doesn't exist."].
+
+err_exclusive() ->
+    ["Error, mutually exclusive options provided.",
+     "Please use either '-i' (with or without '-a') or '-d'."].
+
+get_migresia_folder1(undefined, App, BldCfg) ->
+    case bld_lib:get_default_nodes(BldCfg) of
+        [Node] -> get_migresia_folder1(Node, App, BldCfg);
+        List when length(List) > 1 -> bld_lib:print(err_manynodes()), halt(1);
+        _ -> bld_lib:print(err_nonodes()), halt(1)
+    end;
+get_migresia_folder1(Node, App, BldCfg) ->
+    Params = bld_lib:get_params(BldCfg),
+    {Type, Suffix} = bld_lib:extract_node(Node, Params),
+    NodeDir = bld_lib:node_dir(Type, Suffix, BldCfg),
+    {Res, Remote} = bld_lib:connect_to_node(NodeDir),
+    Res orelse begin bld_lib:print(err_dirnotknown(Node)), halt(1) end,
+    try
+        case get_migresia_folder(Remote, App) of
+            {error, Err1} -> bld_lib:print(err_migrations_dir(Err1)), halt(1);
+            Dir -> check_dir(Dir)
+        end
+    catch
+        throw:{error, Err2} -> bld_lib:print(err_migrations_dir(Err2)), halt(1)
+    end.
+
+get_migresia_folder(Remote, undefined) ->
+    rpc:call(Remote, migresia_migrations, get_default_dir, []);
+get_migresia_folder(Remote, App) ->
+    rpc:call(Remote, migresia_migrations, get_priv_dir, [list_to_atom(App)]).
+
+check_dir(Dir) when is_binary(Dir) ->
+    check_dir(binary_to_list(Dir));
+check_dir(Dir) ->
+    filelib:is_dir(Dir) orelse
+        begin bld_lib:print(err_baddir(Dir)), halt(1) end,
+    io:format("The 'migrations' folder received from the node: ~p.~n~n", [Dir]),
+    list_to_binary(Dir).
+
+err_manynodes() ->
+    [
+     "Error, the release runs more than one default node. Please use option",
+     "'-i' to specify the node to query for the directory location or '-d' to",
+     "specify the directory.",
+     "Use -h or --help for more information about options."
+    ].
+
+err_nonodes() ->
+    ["Error, could not determine default nodes run by this release."].
+
+err_dirnotknown(Node) ->
+    ["Error, node '" ++ Node ++ "' is not running.",
+     "Please start the node or specify the directory using '-d'."].
+
+err_migrations_dir(Err) ->
+    ["Error, could not determine location of the 'migrations' folder: "
+     ++ io_lib:format("'~p'.~n", [Err])].
+
+err_baddir(Dir) ->
+    [
+     "Error, received a 'migrations' directory from the node but the directory",
+     "is not valid: '" ++ Dir ++ "'."
+    ].
+
+%%------------------------------------------------------------------------------
+
+copy_file({Path, <<Short:14/bytes, ".erl">>}, true, Ts, Dir) ->
+    copy_and_replace(Path, <<Ts/binary, ".erl">>, Short, Ts, Dir);
+copy_file({Path, <<Short:14/bytes, $_, R/binary>>}, true, Ts, Dir) ->
+    copy_and_replace(Path, <<Ts/binary, $_, R/binary>>, Short, Ts, Dir);
+copy_file({Path, <<"11112233445566.erl">>}, false, Ts, Dir) ->
+    copy_and_replace(Path, <<Ts/binary, ".erl">>, Ts, Dir);
+copy_file({Path, <<"11112233445566", $_, R/binary>>}, false, Ts, Dir) ->
+    copy_and_replace(Path, <<Ts/binary, $_, R/binary>>, Ts, Dir);
+copy_file({Path, Name}, _, _Ts, Dir) ->
+    cp_file(Path, Name, [], Dir).
+
+copy_and_replace(Path, Name, From, Ts, Dir) ->
+    cp_file(Path, Name, [{From, Ts}], Dir).
+
+copy_and_replace(Path, Name, Ts, Dir) ->
+    cp_file(Path, Name, [{<<"11112233445566">>, Ts}], Dir).
+
+cp_file(Path, Name, Args, Dir) ->
+    Dest = filename:join(Dir, Name),
+    bld_lib:process_file(Path, Dest, Args).
 
 %%------------------------------------------------------------------------------
 

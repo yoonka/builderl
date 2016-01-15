@@ -25,7 +25,7 @@
 
 {application, builderl,
  [{description, "Build and install OTP-friendly releases"},
-  {vsn, "0.2.6"},
+  {vsn, "0.2.7"},
   {modules, []},
   {registered, []},
   {applications, [kernel, stdlib, sasl]}

@@ -30,6 +30,7 @@
          builderl/1,
          update_root_dir/1,
          configure/1,
+         migresia/1,
          mk_dev/1,
          mk_rel/1,
          init/1,
@@ -45,7 +46,7 @@
 -define(BUILDERLAPP, "builderl.app").
 -define(TEMPLATE_DIR, ["priv", "template"]).
 
--define(DEL_LINKS, ["config", "configure", "deps", "init", "mk_dev",
+-define(DEL_LINKS, ["config", "configure", "migresia", "deps", "init", "mk_dev",
                     "mk_rel", "start", "stop", "update_root_dir"]).
 -define(BLD_LINKS, ?DEL_LINKS).
 
@@ -72,6 +73,7 @@ current_app_vsn(Path) ->
 builderl(Args)        -> do_builderl(Args).
 update_root_dir(Args) -> bld_cfg:set_root(Args).
 configure(Args)       -> bld_cfg:configure(Args).
+migresia(Args)        -> bld_cfg:migresia(Args).
 mk_dev([])            -> bld_rel:mk_dev().
 mk_rel([])            -> bld_rel:mk_rel(?BUILDERLLINK).
 init(Args)            -> bld_init:do(Args).

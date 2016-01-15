@@ -30,6 +30,7 @@
 -export([
          halt_badarg/1,
          halt_badtype/1,
+         halt_toomany/1,
          add_node/4,
          extract_node/2,
          node_dir/3,
@@ -90,13 +91,14 @@
 
 err_badarg(Option) ->
     [
-     "Error, unrecognized option:'" ++ Option ++ "', aborting.",
+     "Error, unrecognized option(s): '" ++ string:join(Option, ", ")
+     ++ "', aborting.",
      "Use -h or --help for the list of options."
     ].
 
 err_badtype(Node) ->
     [
-     "Error, unrecognized node type:'" ++ Node ++ "', aborting.",
+     "Error, unrecognized node type: '" ++ Node ++ "', aborting.",
      "Use -h or --help for help."
     ].
 
@@ -112,10 +114,14 @@ err_suffix(Suffix) ->
      "regular expression: '" ++ ?SUFFIX_RE ++ "'."
     ].
 
+err_toomany(Opt) ->
+    ["Error, option '" ++ Opt ++ "' can be specified only once."].
+
 halt_badarg(Other)   -> print(err_badarg(Other)),   halt(1).
 halt_badtype(Text)   -> print(err_badtype(Text)),   halt(1).
 halt_duplicate(Node) -> print(err_duplicate(Node)), halt(1).
 halt_suffix(Suffix)  -> print(err_suffix(Suffix)),  halt(1).
+halt_toomany(Opt)    -> print(err_toomany(Opt)),    halt(1).
 
 %%------------------------------------------------------------------------------
 
