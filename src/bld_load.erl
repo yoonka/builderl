@@ -1,4 +1,4 @@
-%% Copyright (c) 2015, Grzegorz Junka
+%% Copyright (c) 2016, Grzegorz Junka
 %% All rights reserved.
 %%
 %% Redistribution and use in source and binary forms, with or without
@@ -255,6 +255,10 @@ builderl_usage() ->
      "    Updates files and links in the 'bin' folder used by builderl.",
      "    If '-s' is also provided then this option is executed after",
      "    switching to the specified version.",
+     "",
+     "  -uy",
+     "    Like '-u' but overwrites files without asking user for permission",
+     "    to do so. Useful in noninteractive scripts.",
      "************************************************************************"
     ].
 
@@ -291,6 +295,7 @@ format_vsn(Dir, ["builderl", Vsn]) -> {Dir, Vsn}.
 builderl1(["-s", "novsn"|T], Acc) -> builderl1(T, [{switch, novsn}|Acc]);
 builderl1(["-s", Vsn|T], Acc) ->     builderl1(T, [{switch, Vsn}|Acc]);
 builderl1(["-u"|T], Acc) ->          builderl1(T, [update|Acc]);
+builderl1(["-uy"|T], Acc) ->         builderl1(T, [yes_update|Acc]);
 builderl1([], Acc) ->                builderl2(lists:reverse(Acc));
 builderl1(Other, _) ->               bld_lib:halt_badarg(Other).
 
@@ -299,7 +304,8 @@ builderl2(Opts) ->
     lists:foreach(fun(X) -> exec_builderl(X) end, Opts).
 
 exec_builderl({switch, Vsn}) -> switch_to(Vsn);
-exec_builderl(update) -> update_bin().
+exec_builderl(update)        -> update_bin(true);
+exec_builderl(yes_update)    -> update_bin(false).
 
 switch_to(Vsn) ->
     case lists:keyfind(Vsn, 2, get_versions()) of
@@ -325,12 +331,16 @@ update_link(NewLink) ->
     bld_lib:rm_link(?BUILDERLLINK),
     bld_lib:mk_link(NewLink, ?BUILDERLLINK).
 
-update_bin() ->
-    Types = [bld_file_type(X) || X <- ["builderl"] ++ ?DEL_LINKS],
+update_bin(Ask) ->
+    update_bin(Ask, [bld_file_type(X) || X <- ["builderl"] ++ ?DEL_LINKS]).
+
+update_bin(true, Types) ->
     io:format(standard_io, "Following files will be replaced:~n", []),
     lists:foreach(fun(X) -> can_replace(X) andalso print_type(X) end, Types),
     Read = io:get_line("Continue (y/n)? [y]: "),
-    is_continue(Read) andalso do_continue(Types).
+    is_continue(Read) andalso do_continue(Types);
+update_bin(false, Types) ->
+    do_continue(Types).
 
 bld_file_type(Name) ->
     Filename = filename:join(<<"bin">>, Name ++ ".esh"),

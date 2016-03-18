@@ -1,0 +1,26 @@
+#!/bin/sh
+
+# This script initalizes a new project to use builderl as the build tool.
+# It should be executed from an empty folder for the new project, e.g.:
+# mkdir myproject_rel
+# cd myproject_rel
+# curl -s https://github.com/yoonka/builderl/blob/master/priv/init_builderl.sh | sh
+
+# Initialize git repository for the new project
+git init
+git submodule add https://github.com/yoonka/builderl.git deps/builderl
+
+# Copy files from the template folder from the cloned builderl submodule
+cp -r -i deps/builderl/priv/template/* .
+
+# Initialize builderl
+ln -s ../deps/builderl bin/builderl
+cp -i deps/builderl/makefiles/GNUmakefileBuilderl .
+
+# Prefer gmake over make if installed
+cmd=`(type gmake 2>/dev/null || type make 2>/dev/null) | tail -1 | awk '{ print $NF }'`
+$cmd check-rebar
+./bin/builderl.esh -uy
+
+# Add all created files to the new repository
+git add *

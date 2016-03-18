@@ -1,5 +1,5 @@
 # -*- mode: Makefile -*-
-# Copyright (c) 2015, Grzegorz Junka
+# Copyright (c) 2016, Grzegorz Junka
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -38,7 +38,7 @@
 ## Project-specific variables and settings (Change where required)
 ##------------------------------------------------------------------------------
 ## Tested version known to compile riak_pb
-# REBARURL  ?= https://github.com/yoonka/erlstrap/wiki/rebar
+REBARURL  ?= https://github.com/yoonka/erlstrap/wiki/rebar
 ## Compilation flags
 # ERLCFLAGS ?= -W -v -pa deps/lager/ebin +debug_info +'{parse_transform, lager_transform}'
 ##------------------------------------------------------------------------------
