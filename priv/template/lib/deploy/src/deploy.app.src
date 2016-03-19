@@ -1,3 +1,5 @@
+%% -*- mode: erlang -*-
+
 {application, deploy,
  [{description, "Service configuration tool"},
   {vsn, "0.0.2"},

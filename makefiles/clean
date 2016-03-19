@@ -1,5 +1,6 @@
 # -*- mode: Makefile -*-
-# Copyright (c) 2016, Grzegorz Junka
+
+# Copyright (c) 2015-2016, Grzegorz Junka
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
