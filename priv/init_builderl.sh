@@ -10,8 +10,8 @@
 git init
 git submodule add https://github.com/yoonka/builderl.git deps/builderl
 
-# Copy files from the template folder from the cloned builderl submodule
-cp -r -i deps/builderl/priv/template/* .
+# Copy project skeleton from the cloned builderl submodule
+cp -r -i deps/builderl/priv/skel/* .
 cp -i deps/builderl/priv/_gitignore .gitignore
 
 # Initialize builderl

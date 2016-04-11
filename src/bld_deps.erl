@@ -29,17 +29,19 @@
 -export([start/1]).
 
 -define(DEPSDIR, <<"deps-versions">>).
--define(CMDS, [st, get, rm]).
 -define(DEFAULTDEPSDIR, <<"lib">>).
+-define(CMDS, [st, get, rm, mk]).
 
 usage() ->
     [
      "************************************************************************",
-     "Routines to manipulate application dependencies.",
+     "Routines to manipulate application dependencies defined in dependency",
+     "files in the 'deps-versions' folder.",
      "",
      "Usage:",
      "  deps.esh [ -h | --help ]",
      "  deps.esh [ <cmd> | -d <branch> | -b <branch> | -u <url> | --verbose ]",
+     "           [ -- ] [ <dep> | [ <dep> ] ]",
      "",
      "  -h, --help",
      "    This help.",
@@ -51,6 +53,7 @@ usage() ->
      "    st:  git status in a dependency",
      "    get: git clone (or fetch if exists) a dependency",
      "    rm:  delete a dependency with rm -rf",
+     "    mk:  compile a dependency",
      "",
      "  -f",
      "    Force delete the dependency if the folder is dirty.",
@@ -73,6 +76,17 @@ usage() ->
      "",
      "  --verbose",
      "    Prints out options used when executing the command.",
+     "",
+     "  --, <dep>",
+     "    Any string that doesn't match one of the abovementioned options will",
+     "    be interpreted as the last part of the dependency directory (which",
+     "    is the last element in tuples defined in the dependency file).",
+     "    When the optional '--' is provided, any string after '--' will be",
+     "    interpreted as the last part of the dependency directory.",
+     "",
+     "    This option can be used to define a list of dependencies on which",
+     "    the command <cmd> will only be executed. If this option is provided",
+     "    dependencies not on this list will be ignored.",
      "************************************************************************"
     ].
 
@@ -82,6 +96,8 @@ start(["-h"]) ->     bld_lib:print(usage());
 start(["--help"]) -> bld_lib:print(usage());
 start(Other) ->      io:format("~n"), start1(Other, []).
 
+start1(["--"|T], Acc) ->
+    start2(T, Acc);
 start1(["-d" = Arg, Branch|T], Acc) ->
     start1(T, ensure_one(Arg, {default_branch, to_binary(Branch)}, Acc));
 start1(["-b" = Arg, Branch|T], Acc) ->
@@ -92,12 +108,14 @@ start1(["-f"|T], Acc) ->
     start1(T, bld_lib:ensure_member(force, Acc));
 start1(["--verbose" | T], Acc) ->
     start1(T, [verbose | Acc]);
-start1([Cmd|T], Acc) when Cmd =:= "st"; Cmd =:= "get"; Cmd =:= "rm" ->
+start1([Cmd|T], Acc)
+  when Cmd =:= "st"; Cmd =:= "get"; Cmd =:= "rm"; Cmd =:= "mk" ->
     start1(T, [{cmd, list_to_atom(Cmd)}|Acc]);
-start1([], Acc) ->
-    do_start(ensure_url(lists:reverse(Acc)));
-start1(Other, _Acc) ->
-    bld_lib:halt_badarg(Other).
+start1(Other, Acc) ->
+    start2(Other, Acc).
+
+start2([], Acc) -> do_start(ensure_url(lists:reverse(Acc)));
+start2(List, Acc) -> start2([], [{dirs, List} | Acc]).
 
 to_binary(Bin) when is_binary(Bin) -> Bin;
 to_binary(Atom) when is_atom(Atom) -> list_to_binary(atom_to_list(Atom));
@@ -138,7 +156,7 @@ get_builderl_cfg(Options) ->
     case proplists:get_value(builderl_cfg, Options) of
         undefined ->
             File = bld_rel:get_reltool_config(),
-            Config = proplists:get_value(builderl, File),
+            Config = proplists:get_value(builderl, File, []),
             {[{builderl_cfg, Config} | Options], Config};
         Config ->
             {Options, Config}
@@ -147,26 +165,27 @@ get_builderl_cfg(Options) ->
 %%------------------------------------------------------------------------------
 
 do_start(OrgOptions) ->
-    bld_cmd:is_cmd(<<"git">>) orelse halt_no_git(),
-    length([X || {cmd, X} <- OrgOptions]) > 0 orelse halt_no_cmd(),
     not lists:member(verbose, OrgOptions) orelse
         io:format("Using options: ~p~n~n", [OrgOptions]),
+    bld_cmd:is_cmd(<<"git">>) orelse halt_no_git(),
+    length([X || {cmd, X} <- OrgOptions]) > 0 orelse halt_no_cmd(),
 
     Default = proplists:get_value(default_branch, OrgOptions),
     Branch = proplists:get_value(branch, OrgOptions),
-    {Options, DepsOrg} = read_deps(Default, Branch, OrgOptions),
+    {Options, Deps0} = read_deps(Default, Branch, OrgOptions),
 
-    Force = lists:member(force, Options),
     Url = proplists:get_value(url, Options),
     Cmds = [X || {cmd, X} <- Options],
     {ok, MP} = re:compile(<<"=REPOBASE=">>),
     Args = [global, {return, binary}],
-    Deps = [{X, Y, re:replace(Z, MP, Url, Args)} || {X, Y, Z} <- DepsOrg],
+    {Repos, Deps1} = get_repos(proplists:get_value(dirs, Options), Deps0),
+    Deps2 = [{X, Y, re:replace(Z, MP, Url, Args)} || {X, Y, Z} <- Deps1],
 
     CmdsTxt = string:join([atom_to_list(X) || X <- Cmds], "; "),
-    io:format("=== Executing: '~s' in each child repository...~n", [CmdsTxt]),
-    Fun = fun(X) -> execute(Cmds, X, Force) end,
-    Res = bld_lib:call(Fun, Deps),
+    DirsTxt = string:join(Repos, " "),
+    io:format("=== Executing: '~s' in repositories: ~s~n", [CmdsTxt, DirsTxt]),
+    Fun = fun(X) -> execute(Cmds, X, Options) end,
+    Res = bld_lib:call(Fun, Deps2),
     io:format("=== All finished, result: ~p~n", [lists:usort(Res)]).
 
 halt_no_git() -> bld_lib:print(err_nogit()), halt(1).
@@ -188,6 +207,34 @@ err_nocmd() ->
      all_cmds(),
      "Use -h or --help for more information about options."
     ].
+
+get_repos(undefined, Deps) ->
+    lists:unzip(Deps);
+get_repos(Dirs, Deps) ->
+    get_repos(Dirs, Deps, {[], []}, []).
+
+get_repos([Key|T], Deps, {R, D} = Good, Bad) ->
+    case lists:keyfind(Key, 1, Deps) of
+        {X, Y} -> get_repos(T, Deps, {[X|R], [Y|D]}, Bad);
+        false -> get_repos(T, Deps, Good, [Key|Bad])
+    end;
+get_repos([], _Deps, Good, []) ->
+    Good;
+get_repos([], _Deps, _, Bad) ->
+    halt_no_repositories(length(Bad), string:join(Bad, "', '")).
+
+halt_no_repositories(Length, Dirs) ->
+    bld_lib:print(err_norepositories(Length, Dirs)),
+    halt(1).
+
+err_norepositories(Length, Dirs) ->
+    [
+     "Error, " ++ repo(Length, Dirs) ++ " exist in the dependency "
+     "file read from the 'deps-versions' folder.\n"
+    ].
+
+repo(1, Dirs) -> "repository: '" ++ Dirs ++ "' doesn't";
+repo(_, Dirs) -> "repositories: '" ++ Dirs ++ "' don't".
 
 read_deps(Default, undefined, Options) ->
     case {bld_cmd:git_branch(<<".">>), Default} of
@@ -245,7 +292,8 @@ normalize_deps(MP, {Dir, Tag, Cmd, AppDir}) ->
     normalize_deps(MP, Dir, Tag, Cmd, AppDir).
 
 normalize_deps(MP, Dir, Tag, Cmd, AppDir) ->
-    {to_binary(filename:join(Dir, AppDir)), to_binary(Tag), compact(MP, Cmd)}.
+    Path = to_binary(filename:join(Dir, AppDir)),
+    {AppDir, {Path, to_binary(Tag), compact(MP, Cmd)}}.
 
 compact(MP, What) -> re:replace(What, MP, " ", [global, {return, list}]).
 
@@ -263,10 +311,11 @@ err_nobranch() ->
 
 %%------------------------------------------------------------------------------
 
-execute(Cmds, {Path, Tag, Clone}, Force) ->
+execute(Cmds, {Path, Tag, Clone}, Options) ->
     Fun = fun(st)  -> execute_st(Path);
              (get) -> execute_get(Path, Tag, Clone);
-             (rm)  -> execute_rm(Path, Force)
+             (rm)  -> execute_rm(Path, Options);
+             (mk)  -> execute_mk(Path, Options)
           end,
     lists:foreach(fun(X) -> print_result(Fun(X)) end, Cmds).
 
@@ -318,7 +367,9 @@ format_get(Path, {_, List}) -> {error, format_error(error, Path, List, [])}.
 
 %%------------------------------------------------------------------------------
 
-execute_rm(Path, Force) -> execute_rm(Path, Force, bld_cmd:git_status(Path)).
+execute_rm(Path, Options) ->
+    Force = lists:member(force, Options),
+    execute_rm(Path, Force, bld_cmd:git_status(Path)).
 
 execute_rm(Path, _, false) ->
     not_a_directory(Path);
@@ -341,5 +392,10 @@ do_rm(Path) -> bld_cmd:rm_rf(Path).
 format_rm(Path, false, {0, []}) -> {ok, [<<"deleted: ">>, Path, <<"\n">>]};
 format_rm(Path, true, {0, []}) -> {ok, [<<"force-deleted: ">>, Path]};
 format_rm(_, _, {_, L}) -> {error, bin_join(L, <<"\n">>, [])}.
+
+%%------------------------------------------------------------------------------
+
+execute_mk(Path, _Options) ->
+    bld_load:compile(Path).
 
 %%------------------------------------------------------------------------------

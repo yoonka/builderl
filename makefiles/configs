@@ -82,10 +82,16 @@ TAR = $(shell which gtar || which tar)
 run_tgz:
 	(cd $(REL_PATH) && $(TAR) --format=ustar -czf ../$(tgz_rel_name) *)
 
-.PHONY: dev rel tgz depend apps
+.PHONY: apps dev dev2 rel tgz depend
+
+apps: $(foreach d_app_name,$(App_Names),$(d_app_file)) $(a_appup_dests)
+	@echo Done!
 
 dev: compile $(DEV_BUILD_DONE) $(REBAR)
 	@echo Done! Use \'./bin/init.esh\' to install and then \'./bin/start.esh\' to boot.
+
+dev2: apps
+	./bin/deps.esh mk
 
 rel: compile $(REL_BUILD_DONE) $(REBAR) rel_files
 	@echo Done! New release has been created in \'$(REL_PATH)\'.
@@ -95,6 +101,3 @@ tgz: clean-tgz compile $(REL_BUILD_DONE) $(REBAR) rel_files run_tgz
 
 depend: $(all_dep_files)
 	@echo "Dependency files regenerated"
-
-apps: $(foreach d_app_name,$(App_Names),$(d_app_file))
-	@echo Done!

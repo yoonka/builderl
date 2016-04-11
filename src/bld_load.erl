@@ -24,7 +24,7 @@
 
 -module(bld_load).
 
--export([boot/3, current_app_vsn/1]).
+-export([boot/3, compile/1, current_app_vsn/1]).
 
 -export([
          builderl/1,
@@ -44,24 +44,28 @@
 -include("../include/load_builderl.hrl").
 
 -define(BUILDERLAPP, "builderl.app").
--define(TEMPLATE_DIR, ["priv", "template"]).
+-define(SKEL_DIR, ["priv", "skel"]).
 
 -define(DEL_LINKS, ["config", "configure", "migresia", "deps", "init", "mk_dev",
                     "mk_rel", "start", "stop", "update_root_dir"]).
 -define(BLD_LINKS, ?DEL_LINKS).
 
-boot(SrcPath, DstPath, IncPath) ->
-    BldErlAppSrc = ?BUILDERLAPP ++ ".src",
-    AppSrc = list_file(SrcPath, BldErlAppSrc),
-    AppDst = list_file(DstPath, ?BUILDERLAPP),
+boot(SrcPath, DstPath, Root) ->
+    Opts = [{i, Root}],
+    compile_src(SrcPath, DstPath, Opts, true).
 
-    Srcs = list_files(SrcPath, ".erl"),
-    Beams = list_files(DstPath, ".beam"),
-    MaxMTime = get_max_mtime([X || {_, X} <- Srcs]),
-
-    ensure_dir(DstPath),
-    IsDel = compile_modules(SrcPath, DstPath, Srcs, Beams, IncPath, false),
-    compile_app(IsDel, AppSrc, AppDst, MaxMTime, load_modules(DstPath)).
+compile(OPath) ->
+    Path = binary_to_list(OPath),
+    SrcPath = filename:join(Path, "src"),
+    DstPath = filename:join(Path, "ebin"),
+    case compile_src(SrcPath, DstPath, [{i, "lib"}], false) of
+        ok ->
+            {ok, [<<"  => Finished compiling in ">>, SrcPath, <<"\n">>]};
+        {error, {no_app_src_file, SrcPath}} ->
+            {error, [<<"No .app.src file in ">>, SrcPath, <<"\n">>]};
+        {error, {multiple_app_src_files, SrcPath}} ->
+            {error, [<<"More than one .app.src file in ">>, SrcPath, <<"\n">>]}
+    end.
 
 current_app_vsn(Path) ->
     File = filename:join(Path, ?BUILDERLAPP),
@@ -83,6 +87,22 @@ stop(Args)            -> bld_run:stop(Args).
 deps(Args)            -> bld_deps:start(Args).
 
 %%------------------------------------------------------------------------------
+
+compile_src(SrcPath, DstPath, Opts, Load) ->
+    Srcs = list_files(SrcPath, ".erl"),
+    Beams = list_files(DstPath, ".beam"),
+    MaxMTime = get_max_mtime([X || {_, X} <- Srcs]),
+
+    ensure_dir(DstPath),
+    IsDel = compile_modules(SrcPath, DstPath, Srcs, Beams, Opts, false),
+    Modules = list_modules(DstPath),
+    Load =:= false orelse load_modules(DstPath, Modules),
+
+    case list_files(SrcPath, ".app.src") of
+        [App] -> process_app(SrcPath, DstPath, MaxMTime, IsDel, Modules, App);
+        [] -> {error, {no_app_src_file, SrcPath}};
+        _ -> {error, {multiple_app_src_files, SrcPath}}
+    end.
 
 list_file(Path, File) ->
     FileName = filename:join(Path, File),
@@ -126,43 +146,47 @@ mk_dir(Name) ->
 %% Special case when executing from a release
 compile_modules(_, _, [], DT, _, _) when length(DT) > 0 ->
     false;
-compile_modules(Src, Dst, [{B, SM} | ST], [{B, DM} | DT], IncPath, IsDel)
+compile_modules(Src, Dst, [{B, SM} | ST], [{B, DM} | DT], Opts, IsDel)
   when DM > SM ->
-    compile_modules(Src, Dst, ST, DT, IncPath, IsDel);
-compile_modules(Src, Dst, [{B, _} | ST], [{B, _} | DT], IncPath, IsDel) ->
-    do_compile_module(Src, Dst, B, IncPath),
-    compile_modules(Src, Dst, ST, DT, IncPath, IsDel);
-compile_modules(Src, Dst, [{SB, _} | ST], [{DB, _} | _] = D, IncPath, IsDel)
+    compile_modules(Src, Dst, ST, DT, Opts, IsDel);
+compile_modules(Src, Dst, [{B, _} | ST], [{B, _} | DT], Opts, IsDel) ->
+    do_compile_module(Src, Dst, B, Opts),
+    compile_modules(Src, Dst, ST, DT, Opts, IsDel);
+compile_modules(Src, Dst, [{SB, _} | ST], [{DB, _} | _] = D, Opts, IsDel)
   when SB < DB ->
-    do_compile_module(Src, Dst, SB, IncPath),
-    compile_modules(Src, Dst, ST, D, IncPath, IsDel);
-compile_modules(Src, Dst, [{SB, _} | ST], [] = D, IncPath, IsDel) ->
-    do_compile_module(Src, Dst, SB, IncPath),
-    compile_modules(Src, Dst, ST, D, IncPath, IsDel);
-compile_modules(Src, Dst, [{SB, _} | _] = S, [{DB, _} | DT], IncPath, _IsDel)
+    do_compile_module(Src, Dst, SB, Opts),
+    compile_modules(Src, Dst, ST, D, Opts, IsDel);
+compile_modules(Src, Dst, [{SB, _} | ST], [] = D, Opts, IsDel) ->
+    do_compile_module(Src, Dst, SB, Opts),
+    compile_modules(Src, Dst, ST, D, Opts, IsDel);
+compile_modules(Src, Dst, [{SB, _} | _] = S, [{DB, _} | DT], Opts, _IsDel)
   when DB < SB ->
     remove_module(Dst, DB),
-    compile_modules(Src, Dst, S, DT, IncPath, true);
-compile_modules(Src, Dst, [] = S, [{DB, _} | DT], IncPath, _IsDel) ->
+    compile_modules(Src, Dst, S, DT, Opts, true);
+compile_modules(Src, Dst, [] = S, [{DB, _} | DT], Opts, _IsDel) ->
     remove_module(Dst, DB),
-    compile_modules(Src, Dst, S, DT, IncPath, true);
+    compile_modules(Src, Dst, S, DT, Opts, true);
 compile_modules(_, _, [], [], _, IsDel) ->
     IsDel.
 
-do_compile_module(Src, Dst, Name, IncPath) ->
+do_compile_module(Src, Dst, Name, Opts) ->
     File = filename:join(Src, Name),
-    io:format("Compiling: '~s': ", [File]),
-    Opts = [verbose, report, {outdir, Dst}, {i, IncPath}],
-    case compile:file(File, Opts) of
+    NOpts = [verbose, report, {outdir, Dst}] ++ Opts,
+    case compile:file(File, NOpts) of
         {ok, Module} ->
-            io:format("Created '~p'.~n", [Module]);
+            io:format("  Compiling '~s' => Created '~p'.~n", [File, Module]);
         {ok, Module, Warnings} ->
-            io:format("~nWarnings: ~p~nCreated: '~p'~n", [Warnings, Module]);
+            Msg = "  Compiling '~s'~n => Warnings: ~p~n => Created: '~p'~n",
+            io:format(Msg, [File, Warnings, Module]);
         {error, Err, Warn} ->
-            io:format("~nWarnings: ~p~nErrors: ~p~nAborting...~n", [Warn, Err]),
+            Msg = "  Compiling '~s'~n => Warnings: ~p~n => Errors: ~p~n"
+                " => Aborting...~n",
+            io:format(Msg, [File, Warn, Err]),
             halt(1);
         error ->
-            io:format("~nUnknown error encountered, aborting...~n", []),
+            Msg = "  Compiling '~s'~n => Unknown error encountered, "
+                "aborting...~n",
+            io:format(Msg, [File]),
             halt(1)
     end.
 
@@ -175,6 +199,11 @@ remove_module(Dst, Name) ->
     end.
 
 %%------------------------------------------------------------------------------
+
+process_app(SrcPath, DstPath, MaxMTime, IsDel, Modules, {AppName, Ts}) ->
+    AppDst = list_file(DstPath, AppName ++ ".app"),
+    AppSrc = {filename:join(SrcPath, AppName ++ ".app.src"), Ts},
+    compile_app(IsDel, AppSrc, AppDst, MaxMTime, Modules).
 
 compile_app(true, {Src, _}, {Dst, _}, _MaxMTime, Modules) ->
     do_compile_app(Src, Dst, Modules);
@@ -204,13 +233,15 @@ write_app([{App, Name, List}], Dst, Modules) ->
 
 %%------------------------------------------------------------------------------
 
-load_modules(Path) ->
+list_modules(Path) ->
     All = filelib:wildcard("*.beam", Path),
     Modules = [filename:basename(X, ".beam") || X <- All],
+    [list_to_atom(X) || X <- Modules].
+
+load_modules(Path, Modules) ->
     io:format("Loaded:"),
     lists:foreach(fun(X) -> do_load_module(Path, X) end, Modules),
-    io:format("~n"),
-    [list_to_atom(X) || X <- Modules].
+    io:format("~n").
 
 do_load_module(Path, Module) ->
     File = filename:join(Path, Module),
@@ -299,9 +330,9 @@ builderl1(["-uy"|T], Acc) ->         builderl1(T, [yes_update|Acc]);
 builderl1([], Acc) ->                builderl2(lists:reverse(Acc));
 builderl1(Other, _) ->               bld_lib:halt_badarg(Other).
 
-builderl2(Opts) ->
-    io:format("Using options: ~p~n~n", [Opts]),
-    lists:foreach(fun(X) -> exec_builderl(X) end, Opts).
+builderl2(Options) ->
+    io:format("Using options: ~p~n~n", [Options]),
+    lists:foreach(fun(X) -> exec_builderl(X) end, Options).
 
 exec_builderl({switch, Vsn}) -> switch_to(Vsn);
 exec_builderl(update)        -> update_bin(true);
@@ -378,7 +409,7 @@ is_continue([$N|_]) -> false.
 
 do_continue(Types) ->
     lists:foreach(fun(X) -> can_replace(X) andalso delete_type(X) end, Types),
-    From = filename:join([?BUILDERLLINK] ++ ?TEMPLATE_DIR ++ [<<"bin">>]),
+    From = filename:join([?BUILDERLLINK] ++ ?SKEL_DIR ++ [<<"bin">>]),
     Bin = <<"bin">>,
     MainFile = <<"builderl.esh">>,
     bld_lib:cp_file(From, Bin, MainFile),
