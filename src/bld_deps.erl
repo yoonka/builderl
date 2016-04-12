@@ -185,8 +185,16 @@ do_start(OrgOptions) ->
     DirsTxt = string:join(Repos, " "),
     io:format("=== Executing: '~s' in repositories: ~s~n", [CmdsTxt, DirsTxt]),
     Fun = fun(X) -> execute(Cmds, X, Options) end,
-    Res = bld_lib:call(Fun, Deps2),
-    io:format("=== All finished, result: ~p~n", [lists:usort(Res)]).
+    Res0 = lists:flatten(bld_lib:call(Fun, Deps2)),
+    Res1 = [X || {Cmd, _} = X <- Res0, Cmd =/= st],
+    case lists:keymember(error, 2, Res1) of
+        false ->
+            io:format("=== All finished, result OK.~n");
+        true ->
+            io:format("=== All finished but there were errors! "
+                      "Please check the output. ===~n"),
+            halt(1)
+    end.
 
 halt_no_git() -> bld_lib:print(err_nogit()), halt(1).
 
@@ -317,10 +325,10 @@ execute(Cmds, {Path, Tag, Clone}, Options) ->
              (rm)  -> execute_rm(Path, Options);
              (mk)  -> execute_mk(Path, Options)
           end,
-    lists:foreach(fun(X) -> print_result(Fun(X)) end, Cmds).
+    lists:map(fun(X) -> {X, print_result(Fun(X))} end, Cmds).
 
 print_result({ok, Lines}) -> io:format(standard_io, Lines, []);
-print_result({error, Lines}) -> io:format(standard_error, Lines, []).
+print_result({error, Lines}) -> io:format(standard_error, Lines, []), error.
 
 format_error(Path, Err) -> format_error(Path, Err, []).
 
@@ -395,7 +403,12 @@ format_rm(_, _, {_, L}) -> {error, bin_join(L, <<"\n">>, [])}.
 
 %%------------------------------------------------------------------------------
 
-execute_mk(Path, _Options) ->
-    bld_load:compile(Path).
+execute_mk(OPath, Opts) ->
+    Path = binary_to_list(OPath),
+    SrcPath = filename:join(Path, "src"),
+    case filelib:is_dir(SrcPath) of
+        true -> bld_load:compile(SrcPath, filename:join(Path, "ebin"), Opts);
+        false -> {ok, [<<"No 'src' folder in '">>, Path, <<"', ignoring.\n">>]}
+    end.
 
 %%------------------------------------------------------------------------------

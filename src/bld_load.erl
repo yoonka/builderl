@@ -24,7 +24,7 @@
 
 -module(bld_load).
 
--export([boot/3, compile/1, current_app_vsn/1]).
+-export([boot/3, compile/3, current_app_vsn/1]).
 
 -export([
          builderl/1,
@@ -45,6 +45,7 @@
 
 -define(BUILDERLAPP, "builderl.app").
 -define(SKEL_DIR, ["priv", "skel"]).
+-define(BLD_APP_MOD_RE, {builderl_generated}).
 
 -define(DEL_LINKS, ["config", "configure", "migresia", "deps", "init", "mk_dev",
                     "mk_rel", "start", "stop", "update_root_dir"]).
@@ -54,18 +55,8 @@ boot(SrcPath, DstPath, Root) ->
     Opts = [{i, Root}],
     compile_src(SrcPath, DstPath, Opts, true).
 
-compile(OPath) ->
-    Path = binary_to_list(OPath),
-    SrcPath = filename:join(Path, "src"),
-    DstPath = filename:join(Path, "ebin"),
-    case compile_src(SrcPath, DstPath, [{i, "lib"}], false) of
-        ok ->
-            {ok, [<<"  => Finished compiling in ">>, SrcPath, <<"\n">>]};
-        {error, {no_app_src_file, SrcPath}} ->
-            {error, [<<"No .app.src file in ">>, SrcPath, <<"\n">>]};
-        {error, {multiple_app_src_files, SrcPath}} ->
-            {error, [<<"More than one .app.src file in ">>, SrcPath, <<"\n">>]}
-    end.
+compile(SrcPath, DstPath, _Options) ->
+    compile_src(SrcPath, DstPath, [{i, "lib"}], false).
 
 current_app_vsn(Path) ->
     File = filename:join(Path, ?BUILDERLAPP),
@@ -89,11 +80,21 @@ deps(Args)            -> bld_deps:start(Args).
 %%------------------------------------------------------------------------------
 
 compile_src(SrcPath, DstPath, Opts, Load) ->
+    try
+        compile_src1(SrcPath, DstPath, Opts, Load),
+        {ok, [<<"  => Finished compiling in ">>, SrcPath, <<"\n">>]}
+    catch
+        throw:Err ->
+            if Load =:= false -> {error, handle_err(Err)};
+               true -> halt(1) end
+    end.
+
+compile_src1(SrcPath, DstPath, Opts, Load) ->
+    ensure_dir(DstPath),
     Srcs = list_files(SrcPath, ".erl"),
     Beams = list_files(DstPath, ".beam"),
     MaxMTime = get_max_mtime([X || {_, X} <- Srcs]),
 
-    ensure_dir(DstPath),
     IsDel = compile_modules(SrcPath, DstPath, Srcs, Beams, Opts, false),
     Modules = list_modules(DstPath),
     Load =:= false orelse load_modules(DstPath, Modules),
@@ -128,17 +129,11 @@ get_max_mtime(List) -> lists:max(List).
 ensure_dir(Name) ->
     case filelib:is_dir(Name) of
         true -> ok;
-        false -> mk_dir(Name)
-    end.
-
-mk_dir(Name) ->
-    io:format(standard_io, "Create folder '~s': ", [Name]),
-    case file:make_dir(Name) of
-        ok ->
-            io:format(standard_io, "Done.~n", []);
-        {error, Err} ->
-            io:format(standard_io, "Error:~n~1000p~n", [Err]),
-            halt(1)
+        false ->
+            case file:make_dir(Name) of
+                ok -> ok;
+                {error, Err} -> throw({mk_dir, Name, Err})
+            end
     end.
 
 %%------------------------------------------------------------------------------
@@ -173,29 +168,26 @@ do_compile_module(Src, Dst, Name, Opts) ->
     File = filename:join(Src, Name),
     NOpts = [verbose, report, {outdir, Dst}] ++ Opts,
     case compile:file(File, NOpts) of
-        {ok, Module} ->
-            io:format("  Compiling '~s' => Created '~p'.~n", [File, Module]);
-        {ok, Module, Warnings} ->
-            Msg = "  Compiling '~s'~n => Warnings: ~p~n => Created: '~p'~n",
-            io:format(Msg, [File, Warnings, Module]);
+        {ok, _Module} ->
+            io:format("  ERL: Compiled '~s'.~n", [File]);
+        {ok, _Module, Warnings} ->
+            Msg = "  ERL: Compiled '~s',~n => Warnings: ~p.~n",
+            io:format(Msg, [File, Warnings]);
         {error, Err, Warn} ->
-            Msg = "  Compiling '~s'~n => Warnings: ~p~n => Errors: ~p~n"
-                " => Aborting...~n",
+            Msg = "!Ignored '~s',~n => Warnings: ~p,~n => Errors: ~p.~n",
             io:format(Msg, [File, Warn, Err]),
-            halt(1);
+            throw({compile_error, Src, Err});
         error ->
-            Msg = "  Compiling '~s'~n => Unknown error encountered, "
-                "aborting...~n",
+            Msg = "  !Ignored '~s',~n => Unknown error encountered!.~n",
             io:format(Msg, [File]),
-            halt(1)
+            throw({compile_error, Src, unknown_error})
     end.
 
 remove_module(Dst, Name) ->
     File = filename:join(Dst, Name ++ ".beam"),
-    io:format("Deleting '~s': ", [File]),
     case file:delete(File) of
-        ok -> io:format("OK~n");
-        Err -> do_error(Err)
+        ok -> io:format("  !Deleted '~s'.~n", [File]);
+        {error, Err} -> throw({delete, File, Err})
     end.
 
 %%------------------------------------------------------------------------------
@@ -220,16 +212,34 @@ compile_app(false, _, _, _, _) ->
     ok.
 
 do_compile_app(Src, Dst, Modules) ->
-    write_app(bld_lib:consult_app_file(Src), Dst, Modules).
+    case file:read_file(Src) of
+        {ok, Bin} -> scan_app(Src, Dst, Modules, Bin);
+        {error, Err} -> throw({app_src, Src, Err})
+    end.
 
-write_app([{App, Name, List}], Dst, Modules) ->
-    io:format("Writing ~s: ", [Dst]),
-    NewList = lists:keyreplace(modules, 1, List, {modules, Modules}),
+scan_app(Src, Dst, Modules, OBin) ->
+    Pat = <<"=MODULES=|%MODULES%|{{modules}}">>,
+    To = io_lib:format("~p", [?BLD_APP_MOD_RE]),
+    Bin = iolist_to_binary(re:replace(OBin, Pat, To)),
+    case erl_scan:string(binary_to_list(Bin)) of
+        {ok, Tks, _} -> write_app(Src, Dst, Modules, erl_parse:parse_term(Tks));
+        {error, Err, Loc} -> throw({scan_error, Src, Err, Loc})
+    end.
+
+write_app(_Src, Dst, Modules, {ok, {App, Name, List}}) ->
+    Term = {modules, [?BLD_APP_MOD_RE]},
+    NewList = list_replace(List, Term, {modules, Modules}, []),
     AppOut = io_lib:format("~p.~n", [{App, Name, NewList}]),
     case file:write_file(Dst, AppOut) of
-        ok -> io:format("OK~n");
-        Err -> do_error(Err)
-    end.
+        ok -> io:format("  APP: Created '~s'.~n", [Dst]);
+        {error, Err} -> throw({write_error, Dst, Err})
+    end;
+write_app(Src, _Dst, _Modules, Other) ->
+    throw({parse_error, Src, Other}).
+
+list_replace([What|T], What, To, Acc) -> list_replace(T, What, To, [To|Acc]);
+list_replace([X|T], What, To, Acc) -> list_replace(T, What, To, [X|Acc]);
+list_replace([], _What, _To, Acc) -> lists:reverse(Acc).
 
 %%------------------------------------------------------------------------------
 
@@ -247,14 +257,35 @@ do_load_module(Path, Module) ->
     File = filename:join(Path, Module),
     case code:load_abs(File) of
         {module, Mod} -> io:format(" ~s", [Mod]);
-        Err -> io:format("~n"), do_error(Err)
+        {error, Err} -> throw({load_error, File, Err})
     end.
 
 %%------------------------------------------------------------------------------
 
-do_error(Err) ->
-    io:format("Error '~p', aborting.~n", [Err]),
-    halt(1).
+handle_err({no_app_src_file, SrcPath}) ->
+    [<<"Error: No .app.src file in ">>, SrcPath, <<"\n">>];
+handle_err({multiple_app_src_files, SrcPath}) ->
+    [<<"Error: More than one .app.src file in ">>, SrcPath, <<"\n">>];
+handle_err({app_src, Src, Err}) ->
+    [<<"Error reading '">>, Src, <<"', reason: ">>, to_term(Err), <<"\n">>];
+handle_err({scan_error, Src, Err, Loc}) ->
+    [<<"Error reading '">>, Src, <<"' in line ">>, to_term(Loc), <<": ">>,
+     to_term(Err), <<"\n">>];
+handle_err({parse_error, Src, Other}) ->
+    [<<"Error parsing '">>, Src, <<"': ">>, to_term(Other), <<"\n">>];
+handle_err({write_error, Dst, Err}) ->
+    [<<"Error writing '">>, Dst, <<"': ">>, to_term(Err), <<"\n">>];
+handle_err({compile_error, Src, Err}) ->
+    [<<"Error when compiling '">>, Src, <<"': ">>, to_term(Err), <<"\n">>];
+handle_err({mk_dir, Name, Err}) ->
+    [<<"Error, couldn't create the folder '">>, Name, <<"': ">>,
+     to_term(Err), <<"\n">>];
+handle_err({delete, File, Err}) ->
+    [<<"Error when deleting file '">>, File, <<"': ">>, to_term(Err), <<"\n">>];
+handle_err({load_error, File, Err}) ->
+    [<<"\nError loading module '">>, File, <<"': ">>, to_term(Err), <<"\n">>].
+
+to_term(X) -> io_lib:format("~p", [X]).
 
 %%------------------------------------------------------------------------------
 
