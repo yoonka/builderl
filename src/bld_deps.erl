@@ -117,6 +117,7 @@ start1(Other, Acc) ->
 start2([], Acc) -> do_start(ensure_url(lists:reverse(Acc)));
 start2(List, Acc) -> start2([], [{dirs, List} | Acc]).
 
+to_binary(undefined) -> undefined;
 to_binary(Bin) when is_binary(Bin) -> Bin;
 to_binary(Atom) when is_atom(Atom) -> list_to_binary(atom_to_list(Atom));
 to_binary(List) -> list_to_binary(List).
@@ -168,14 +169,14 @@ do_start(OrgOptions) ->
     not lists:member(verbose, OrgOptions) orelse
         io:format("Using options: ~p~n~n", [OrgOptions]),
     bld_cmd:is_cmd(<<"git">>) orelse halt_no_git(),
-    length([X || {cmd, X} <- OrgOptions]) > 0 orelse halt_no_cmd(),
+    Cmds = [X || {cmd, X} <- OrgOptions],
+    length(Cmds) > 0 orelse halt_no_cmd(),
 
     Default = proplists:get_value(default_branch, OrgOptions),
     Branch = proplists:get_value(branch, OrgOptions),
     {Options, Deps0} = read_deps(Default, Branch, OrgOptions),
 
     Url = proplists:get_value(url, Options),
-    Cmds = [X || {cmd, X} <- Options],
     {ok, MP} = re:compile(<<"=REPOBASE=">>),
     Args = [global, {return, binary}],
     {Repos, Deps1} = get_repos(proplists:get_value(dirs, Options), Deps0),
@@ -201,8 +202,8 @@ halt_no_git() -> bld_lib:print(err_nogit()), halt(1).
 err_nogit() ->
     [
      "Error, git command couldn't be found.",
-     "Please ensure that git is installed and its executable available in one",
-     "of the paths specified in the PATH environment variable.",
+     "Please ensure that git is installed and its executable is available",
+     "in one of the paths specified in the PATH environment variable.",
      "Use -h or --help for more information about options."
     ].
 
@@ -294,6 +295,10 @@ read_deps_file(Branch) ->
             halt(1)
     end.
 
+normalize_deps(MP, {AppDir}) ->
+    normalize_deps(MP, ?DEFAULTDEPSDIR, undefined, undefined, AppDir);
+normalize_deps(MP, {Dir, AppDir}) ->
+    normalize_deps(MP, Dir, undefined, undefined, AppDir);
 normalize_deps(MP, {Tag, Cmd, AppDir}) ->
     normalize_deps(MP, ?DEFAULTDEPSDIR, Tag, Cmd, AppDir);
 normalize_deps(MP, {Dir, Tag, Cmd, AppDir}) ->
@@ -303,6 +308,7 @@ normalize_deps(MP, Dir, Tag, Cmd, AppDir) ->
     Path = to_binary(filename:join(Dir, AppDir)),
     {AppDir, {Path, to_binary(Tag), compact(MP, Cmd)}}.
 
+compact(_MP, undefined) -> undefined;
 compact(MP, What) -> re:replace(What, MP, " ", [global, {return, list}]).
 
 halt_no_branch() -> bld_lib:print(err_nobranch()), halt(1).
