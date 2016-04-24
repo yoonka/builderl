@@ -54,11 +54,23 @@ bin/%:
 bin_files = bin/start.boot bin/start.script \
   bin/start_clean.boot bin/start_sasl.boot
 
-.PHONY: do-apps compile dev_files run_reltool rel_files run_tgz
+.PHONY: do-apps compile bld_deps qcompile bld_deps_test test_compile
 
 do-apps: $(foreach app_name,$(App_Names),$(app_name:%=%.app))
 
 compile: compile-deps do-apps $(a_appup_dests) dev_files
+
+bld_deps:
+	./bin/deps.esh mk
+
+qcompile: compile-deps bld_deps $(a_appup_dests) dev_files
+
+bld_deps_test:
+	./bin/deps.esh mk -p test
+
+test_compile: compile-deps bld_deps_test dev_files $(DEV_BUILD_DONE) $(REBAR)
+
+.PHONY: dev_files run_reltool rel_files run_tgz
 
 dev_files: $(erts_files) $(bin_files)
 
@@ -82,7 +94,7 @@ TAR = $(shell which gtar || which tar)
 run_tgz:
 	(cd $(REL_PATH) && $(TAR) --format=ustar -czf ../$(tgz_rel_name) *)
 
-.PHONY: apps dev dev2 qdev rel tgz depend
+.PHONY: apps dev qdev rel tgz depend
 
 apps: $(foreach d_app_name,$(App_Names),$(d_app_file)) $(a_appup_dests)
 	@echo Done!
@@ -90,10 +102,7 @@ apps: $(foreach d_app_name,$(App_Names),$(d_app_file)) $(a_appup_dests)
 dev: compile $(DEV_BUILD_DONE) $(REBAR)
 	@echo Done! Use \'./bin/init.esh\' to install and then \'./bin/start.esh\' to boot.
 
-dev2:
-	./bin/deps.esh mk
-
-qdev: dev2 $(DEV_BUILD_DONE) $(REBAR)
+qdev: qcompile $(DEV_BUILD_DONE) $(REBAR)
 	@echo Done! Use \'./bin/init.esh\' to install and then \'./bin/start.esh\' to boot.
 
 rel: compile $(REL_BUILD_DONE) $(REBAR) rel_files

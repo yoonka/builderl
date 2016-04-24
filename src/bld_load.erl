@@ -52,11 +52,12 @@
 -define(BLD_LINKS, ?DEL_LINKS).
 
 boot(SrcPath, DstPath, Root) ->
-    Opts = [{i, Root}],
+    Opts = [verbose, report, {i, Root}, {i, "lib"}],
     compile_src(SrcPath, DstPath, Opts, true).
 
-compile(SrcPath, DstPath, _Options) ->
-    compile_src(SrcPath, DstPath, [{i, "lib"}], false).
+compile(SrcPath, DstPath, Options) ->
+    ErlOpts = proplists:get_value(erl, Options),
+    compile_src(SrcPath, DstPath, ErlOpts, false).
 
 current_app_vsn(Path) ->
     File = filename:join(Path, ?BUILDERLAPP),
@@ -81,7 +82,7 @@ deps(Args)            -> bld_deps:start(Args).
 
 compile_src(SrcPath, DstPath, Opts, Load) ->
     try
-        compile_src1(SrcPath, DstPath, Opts, Load),
+        compile_src1(SrcPath, DstPath, [{outdir, DstPath}] ++ Opts, Load),
         {ok, [<<"  => Finished compiling in ">>, SrcPath, <<"\n">>]}
     catch
         throw:Err ->
@@ -145,14 +146,14 @@ compile_modules(Src, Dst, [{B, SM} | ST], [{B, DM} | DT], Opts, IsDel)
   when DM > SM ->
     compile_modules(Src, Dst, ST, DT, Opts, IsDel);
 compile_modules(Src, Dst, [{B, _} | ST], [{B, _} | DT], Opts, IsDel) ->
-    do_compile_module(Src, Dst, B, Opts),
+    do_compile_module(Src, B, Opts),
     compile_modules(Src, Dst, ST, DT, Opts, IsDel);
 compile_modules(Src, Dst, [{SB, _} | ST], [{DB, _} | _] = D, Opts, IsDel)
   when SB < DB ->
-    do_compile_module(Src, Dst, SB, Opts),
+    do_compile_module(Src, SB, Opts),
     compile_modules(Src, Dst, ST, D, Opts, IsDel);
 compile_modules(Src, Dst, [{SB, _} | ST], [] = D, Opts, IsDel) ->
-    do_compile_module(Src, Dst, SB, Opts),
+    do_compile_module(Src, SB, Opts),
     compile_modules(Src, Dst, ST, D, Opts, IsDel);
 compile_modules(Src, Dst, [{SB, _} | _] = S, [{DB, _} | DT], Opts, _IsDel)
   when DB < SB ->
@@ -164,23 +165,22 @@ compile_modules(Src, Dst, [] = S, [{DB, _} | DT], Opts, _IsDel) ->
 compile_modules(_, _, [], [], _, IsDel) ->
     IsDel.
 
-do_compile_module(Src, Dst, Name, Opts) ->
+do_compile_module(Src, Name, Opts) ->
     File = filename:join(Src, Name),
-    NOpts = [verbose, report, {outdir, Dst}] ++ Opts,
-    case compile:file(File, NOpts) of
+    case compile:file(File, Opts) of
         {ok, _Module} ->
             io:format("  ERL: Compiled '~s'.~n", [File]);
         {ok, _Module, Warnings} ->
-            Msg = "  ERL: Compiled '~s',~n => Warnings: ~p.~n",
+            Msg = "  ERL: Compiled '~s',~n=> Warnings: ~p.~n",
             io:format(Msg, [File, Warnings]);
         {error, Err, Warn} ->
-            Msg = "!Ignored '~s',~n => Warnings: ~p,~n => Errors: ~p.~n",
+            Msg = "!Ignored '~s',~n=> Warnings: ~p,~n=> Errors: ~p.~n",
             io:format(Msg, [File, Warn, Err]),
-            throw({compile_error, Src, Err});
+            throw({compile_error, Src});
         error ->
-            Msg = "  !Ignored '~s',~n => Unknown error encountered!.~n",
+            Msg = "!Ignored '~s',~n=> Unknown error encountered!.~n",
             io:format(Msg, [File]),
-            throw({compile_error, Src, unknown_error})
+            throw({compile_error, Src})
     end.
 
 remove_module(Dst, Name) ->
@@ -275,8 +275,8 @@ handle_err({parse_error, Src, Other}) ->
     [<<"Error parsing '">>, Src, <<"': ">>, to_term(Other), <<"\n">>];
 handle_err({write_error, Dst, Err}) ->
     [<<"Error writing '">>, Dst, <<"': ">>, to_term(Err), <<"\n">>];
-handle_err({compile_error, Src, Err}) ->
-    [<<"Error when compiling '">>, Src, <<"': ">>, to_term(Err), <<"\n">>];
+handle_err({compile_error, Src}) ->
+    [<<"Error when compiling '">>, Src, <<"'.\n">>];
 handle_err({mk_dir, Name, Err}) ->
     [<<"Error, couldn't create the folder '">>, Name, <<"': ">>,
      to_term(Err), <<"\n">>];

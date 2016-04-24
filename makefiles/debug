@@ -1,6 +1,6 @@
 # -*- mode: Makefile -*-
 
-# Copyright (c) 2015-2016, Peter-Henry Mander
+# Copyright (c) 2015-2016, Peter-Henry Mander and Grzegorz Junka
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -26,13 +26,8 @@
 
 make_executable := $(shell which $(MAKE))
 
-.PHONY: unit_test
-unit_test: dev
-	MAKE_GOAL=run \
-	SHELL="$(make_executable)" script -a ./tmp/$@.log
-
-# run: dev
-# 	$(ERL) -args_file $(LOCAL_VM_ARGS) -boot releases/$(Rel_Vsn)/cmd
+.PHONY: test
+test: test_compile
 
 # NOTE: Map the application name to the release it appears in.
 #

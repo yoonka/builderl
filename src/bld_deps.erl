@@ -30,7 +30,10 @@
 
 -define(DEPSDIR, <<"deps-versions">>).
 -define(DEFAULTDEPSDIR, <<"lib">>).
+-define(MASTER_BRANCH, "master").
 -define(CMDS, [st, get, rm, mk]).
+
+-define(ERL_EXT, erl).
 
 usage() ->
     [
@@ -40,23 +43,23 @@ usage() ->
      "",
      "Usage:",
      "  deps.esh [ -h | --help ]",
-     "  deps.esh [ <cmd> | -d <branch> | -b <branch> | -u <url> | --verbose ]",
-     "           [ -- ] [ <dep> | [ <dep> ] ]",
+     "  deps.esh [ <cmd> | [ <cmd> ] ]",
+     "           [ -d <branch> | -b <branch> | -u <url> | --verbose ]",
+     "           [ -f ] [ -p <profile> ] [ -- ] [ <dep> | [ <dep> ] ]",
      "",
      "  -h, --help",
      "    This help.",
      "",
      "  <cmd>",
-     "    Command to execute. Available commands:",
+     "    Command or commands to execute. If multiple commands are specified",
+     "    they are executed in the specified order on each dependency",
+     "    separately (in parallel). Available commands:",
      "    " ++ all_cmds(),
-     "  where:",
+     "   where:",
      "    st:  git status in a dependency",
      "    get: git clone (or fetch if exists) a dependency",
      "    rm:  delete a dependency with rm -rf",
      "    mk:  compile a dependency",
-     "",
-     "  -f",
-     "    Force delete the dependency if the folder is dirty.",
      "",
      "  -d <branch>",
      "    Default branch to use if the current directory is not a git",
@@ -74,6 +77,22 @@ usage() ->
      "    environment variable: ENV_REPO_BASE. This allows to specify",
      "    different prefix urls for different projects on the same host.",
      "",
+     "  -f",
+     "    Used with command 'rm'.",
+     "    Force delete the dependency if the folder is dirty.",
+     "",
+     "  -p <profile>",
+     "    Used with command 'mk'.",
+     "    Adds compilation options from the specified profile to the end",
+     "    of the list of options that will be passed to OTP compilers when",
+     "    compiling files of the particular type. Initially that list contains",
+     "    options from the 'default' profile, if it's defined. However, if the",
+     "    'default' profile is defined explicitly with '-p' then the list of",
+     "    options is initially empty and options are added to that list from",
+     "    profiles in the order in which they are specified by '-p' arguments.",
+     "    Profiles are defined in file 'etc/reltool.config' in section",
+     "    'builderl' under configuration option 'make_profiles'.",
+     "",
      "  --verbose",
      "    Prints out options used when executing the command.",
      "",
@@ -85,7 +104,7 @@ usage() ->
      "    interpreted as the last part of the dependency directory.",
      "",
      "    This option can be used to define a list of dependencies on which",
-     "    the command <cmd> will only be executed. If this option is provided",
+     "    the <cmd> commands will be executed. If this option is provided",
      "    dependencies not on this list will be ignored.",
      "************************************************************************"
     ].
@@ -106,6 +125,8 @@ start1(["-u" = Arg, Url|T], Acc) ->
     start1(T, ensure_one(Arg, {url, to_binary(Url)}, Acc));
 start1(["-f"|T], Acc) ->
     start1(T, bld_lib:ensure_member(force, Acc));
+start1(["-p", Profile|T], Acc) ->
+    start1(T, [{profile, Profile}|Acc]);
 start1(["--verbose" | T], Acc) ->
     start1(T, [verbose | Acc]);
 start1([Cmd|T], Acc)
@@ -144,7 +165,7 @@ add_url(OrgOptions) ->
     EnvRepoBase = proplists:get_value(env_repo_base, Config),
     RepoBase = proplists:get_value(default_repo_base, Config),
     Dummy = "default_repo_base not set in the builderl config section "
-        "in etc/reltool.config!!!",
+        "in 'etc/reltool.config'!!!",
     case {RepoBase, EnvRepoBase =/= undefined andalso os:getenv(EnvRepoBase)} of
         {undefined, false} -> add_url(Dummy, Options);
         {_, false} -> add_url(RepoBase, Options);
@@ -165,28 +186,24 @@ get_builderl_cfg(Options) ->
 
 %%------------------------------------------------------------------------------
 
-do_start(OrgOptions) ->
-    not lists:member(verbose, OrgOptions) orelse
-        io:format("Using options: ~p~n~n", [OrgOptions]),
+do_start(Options0) ->
+    not lists:member(verbose, Options0) orelse
+        io:format("Using options: ~p~n~n", [Options0]),
     bld_cmd:is_cmd(<<"git">>) orelse halt_no_git(),
-    Cmds = [X || {cmd, X} <- OrgOptions],
+    Cmds = [X || {cmd, X} <- Options0],
     length(Cmds) > 0 orelse halt_no_cmd(),
 
-    Default = proplists:get_value(default_branch, OrgOptions),
-    Branch = proplists:get_value(branch, OrgOptions),
-    {Options, Deps0} = read_deps(Default, Branch, OrgOptions),
+    {Options1, CompilerOpts} = process_compiler_options(Options0),
+    Options2 = [{compiler_options, CompilerOpts}|Options1],
+    not lists:member(mk, Cmds) orelse print_compiler_options(CompilerOpts),
 
-    Url = proplists:get_value(url, Options),
-    {ok, MP} = re:compile(<<"=REPOBASE=">>),
-    Args = [global, {return, binary}],
-    {Repos, Deps1} = get_repos(proplists:get_value(dirs, Options), Deps0),
-    Deps2 = [{X, Y, re:replace(Z, MP, Url, Args)} || {X, Y, Z} <- Deps1],
+    {Options3, Repos, Deps} = process_deps(Options2),
 
     CmdsTxt = string:join([atom_to_list(X) || X <- Cmds], "; "),
     DirsTxt = string:join(Repos, " "),
     io:format("=== Executing: '~s' in repositories: ~s~n", [CmdsTxt, DirsTxt]),
-    Fun = fun(X) -> execute(Cmds, X, Options) end,
-    Res0 = lists:flatten(bld_lib:call(Fun, Deps2)),
+    Fun = fun(X) -> execute(Cmds, X, Options3) end,
+    Res0 = lists:flatten(bld_lib:call(Fun, Deps)),
     Res1 = [X || {Cmd, _} = X <- Res0, Cmd =/= st],
     case lists:keymember(error, 2, Res1) of
         false ->
@@ -216,6 +233,60 @@ err_nocmd() ->
      all_cmds(),
      "Use -h or --help for more information about options."
     ].
+
+process_compiler_options(OrgOptions) ->
+    Profiles = [list_to_atom(X) || {profile, X} <- OrgOptions],
+    {Options, Config} = get_builderl_cfg(OrgOptions),
+    MKProfiles = proplists:get_value(make_profiles, Config, []),
+    Acc0 = get_default_profile(lists:member(default, Profiles), MKProfiles),
+    Fun = fun(X, AccIn) -> add_profile(X, AccIn, MKProfiles) end,
+    {Options, lists:foldl(Fun, Acc0, Profiles)}.
+
+get_default_profile(false, MKProfiles) ->
+    proplists:get_value(default, MKProfiles, []);
+get_default_profile(true, _) ->
+    [].
+
+add_profile(X, AccIn, MKProfiles) ->
+    Res = proplists:get_value(X, MKProfiles),
+    Res =/= undefined orelse halt_no_profile(X),
+    lists:foldl(fun add_options/2, AccIn, Res).
+
+halt_no_profile(Profile) -> bld_lib:print(err_noprofile(Profile)), halt(1).
+
+err_noprofile(Profile) ->
+    [
+     "Error, profile '" ++ atom_to_list(Profile) ++ "' is not defined in the "
+     "'make_profiles' section of 'builderl' config in the 'etc/reltool.config'"
+     "file."
+    ].
+
+add_options({Type, Opts} = Profile, AccIn) when Type =:= ?ERL_EXT ->
+    case proplists:get_value(Type, AccIn) of
+        undefined -> [Profile|AccIn];
+        List -> lists:keyreplace(Type, 1, AccIn, List ++ Opts)
+    end.
+
+print_compiler_options(Opts) ->
+    io:format("Using compilation options:~n"),
+    PFun = fun({T, O}) -> io:format("~s: ~p~n", [T, O]) end,
+    lists:foreach(PFun, Opts),
+    io:format("~n").
+
+%%------------------------------------------------------------------------------
+
+process_deps(OrgOptions) ->
+    Default = proplists:get_value(default_branch, OrgOptions),
+    Branch = proplists:get_value(branch, OrgOptions),
+    {Options, Deps0} = read_deps(Default, Branch, OrgOptions),
+
+    Url = proplists:get_value(url, Options),
+    {ok, MP} = re:compile(<<"=REPOBASE=">>),
+    Args = [global, {return, binary}],
+    {Repos, Deps1} = get_repos(proplists:get_value(dirs, Options), Deps0),
+    ReFun = fun(undefined) -> undefined;
+               (Z) -> re:replace(Z, MP, Url, Args) end,
+    {Options, Repos, [{X, Y, ReFun(Z)} || {X, Y, Z} <- Deps1]}.
 
 get_repos(undefined, Deps) ->
     lists:unzip(Deps);
@@ -326,7 +397,7 @@ err_nobranch() ->
 %%------------------------------------------------------------------------------
 
 execute(Cmds, {Path, Tag, Clone}, Options) ->
-    Fun = fun(st)  -> execute_st(Path);
+    Fun = fun(st)  -> execute_st(Path, Clone);
              (get) -> execute_get(Path, Tag, Clone);
              (rm)  -> execute_rm(Path, Options);
              (mk)  -> execute_mk(Path, Options)
@@ -356,9 +427,13 @@ bin_join([], _, Acc) -> Acc.
 not_a_directory(Path) ->
     {ok, [<<"not a directory, ignoring: ">>, Path, <<"\n">>]}.
 
+no_repository(Path) ->
+    {ok, [<<"repository not provided, ignoring: ">>, Path, <<"\n">>]}.
+
 %%------------------------------------------------------------------------------
 
-execute_st(Path) -> format_status(Path, bld_cmd:git_status(Path)).
+execute_st(Path, undefined) -> no_repository(Path);
+execute_st(Path, _Clone) -> format_status(Path, bld_cmd:git_status(Path)).
 
 format_status(Path, false) -> not_a_directory(Path);
 format_status(Path, {0, []}) -> {ok, [<<"clean: ">>, Path, <<"\n">>]};
@@ -366,6 +441,10 @@ format_status(Path, Err) -> {error, format_error(Path, Err)}.
 
 %%------------------------------------------------------------------------------
 
+execute_get(Path, _Tag, undefined) ->
+    no_repository(Path);
+execute_get(Path, undefined, Clone) ->
+    execute_get(Path, ?MASTER_BRANCH, Clone, bld_cmd:git_status(Path));
 execute_get(Path, Tag, Clone) ->
     execute_get(Path, Tag, Clone, bld_cmd:git_status(Path)).
 
@@ -413,8 +492,12 @@ execute_mk(OPath, Opts) ->
     Path = binary_to_list(OPath),
     SrcPath = filename:join(Path, "src"),
     case filelib:is_dir(SrcPath) of
-        true -> bld_load:compile(SrcPath, filename:join(Path, "ebin"), Opts);
+        true -> compile(SrcPath, filename:join(Path, "ebin"), Opts);
         false -> {ok, [<<"No 'src' folder in '">>, Path, <<"', ignoring.\n">>]}
     end.
+
+compile(SrcPath, DstPath, Opts) ->
+    CompilerOpts = proplists:get_value(compiler_options, Opts, []),
+    bld_load:compile(SrcPath, DstPath, CompilerOpts).
 
 %%------------------------------------------------------------------------------
