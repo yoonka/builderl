@@ -61,7 +61,10 @@ BLDERLLOCAL := GNUmakefileBuilderl
 # URL to download the builderl/makefiles/GNUmakefileBuilderl makefile
 BLDERLMKURL := https://raw.githubusercontent.com/yoonka/builderl/master/makefiles/GNUmakefileBuilderl
 
-ifneq ($(MAKECMDGOALS),$(filter $(MAKECMDGOALS),rm-builderl))
+ifneq (rm-builderl,$(filter $(MAKECMDGOALS),rm-builderl))
+
+.PHONY: all
+all: get-deps tgz
 
 ifeq ($(wildcard $(BLDERLLOCAL)),)
 $(shell erl -noshell -s inets -s ssl -eval \

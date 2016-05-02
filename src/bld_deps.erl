@@ -186,23 +186,20 @@ get_builderl_cfg(Options) ->
 
 %%------------------------------------------------------------------------------
 
-do_start(Options0) ->
-    not lists:member(verbose, Options0) orelse
-        io:format("Using options: ~p~n~n", [Options0]),
+do_start(Opts0) ->
+    not lists:member(verbose, Opts0) orelse
+        io:format("Using options: ~p~n~n", [Opts0]),
     bld_cmd:is_cmd(<<"git">>) orelse halt_no_git(),
-    Cmds = [X || {cmd, X} <- Options0],
+    Cmds = [X || {cmd, X} <- Opts0],
     length(Cmds) > 0 orelse halt_no_cmd(),
 
-    {Options1, CompilerOpts} = process_compiler_options(Options0),
-    Options2 = [{compiler_options, CompilerOpts}|Options1],
-    not lists:member(mk, Cmds) orelse print_compiler_options(CompilerOpts),
-
-    {Options3, Repos, Deps} = process_deps(Options2),
+    Opts1 = process_make_profiles(lists:member(mk, Cmds), Opts0),
+    {Opts2, Repos, Deps} = process_deps(Opts1),
 
     CmdsTxt = string:join([atom_to_list(X) || X <- Cmds], "; "),
     DirsTxt = string:join(Repos, " "),
     io:format("=== Executing: '~s' in repositories: ~s~n", [CmdsTxt, DirsTxt]),
-    Fun = fun(X) -> execute(Cmds, X, Options3) end,
+    Fun = fun(X) -> execute(Cmds, X, Opts2) end,
     Res0 = lists:flatten(bld_lib:call(Fun, Deps)),
     Res1 = [X || {Cmd, _} = X <- Res0, Cmd =/= st],
     case lists:keymember(error, 2, Res1) of
@@ -234,13 +231,15 @@ err_nocmd() ->
      "Use -h or --help for more information about options."
     ].
 
-process_compiler_options(OrgOptions) ->
-    Profiles = [list_to_atom(X) || {profile, X} <- OrgOptions],
-    {Options, Config} = get_builderl_cfg(OrgOptions),
+process_make_profiles(IsMK, Opts0) ->
+    Profiles = [list_to_atom(X) || {profile, X} <- Opts0],
+    {Opts1, Config} = get_builderl_cfg(Opts0),
     MKProfiles = proplists:get_value(make_profiles, Config, []),
     Acc0 = get_default_profile(lists:member(default, Profiles), MKProfiles),
     Fun = fun(X, AccIn) -> add_profile(X, AccIn, MKProfiles) end,
-    {Options, lists:foldl(Fun, Acc0, Profiles)}.
+    Combined = lists:foldl(Fun, Acc0, Profiles),
+    if IsMK =:= false -> [{combined_profile, Combined}|Opts1];
+       true -> [{combined_profile, init_make(Combined)}|Opts1] end.
 
 get_default_profile(false, MKProfiles) ->
     proplists:get_value(default, MKProfiles, []);
@@ -267,11 +266,47 @@ add_options({Type, Opts} = Profile, AccIn) when Type =:= ?ERL_EXT ->
         List -> lists:keyreplace(Type, 1, AccIn, List ++ Opts)
     end.
 
-print_compiler_options(Opts) ->
+init_make(Combined) ->
     io:format("Using compilation options:~n"),
     PFun = fun({T, O}) -> io:format("~s: ~p~n", [T, O]) end,
-    lists:foreach(PFun, Opts),
-    io:format("~n").
+    lists:foreach(PFun, Combined),
+    io:format("~n"),
+
+    MakeOpts = proplists:get_value(make_options, Combined, []),
+    MFun = fun(X, Acc) -> do_mk_option(X, Acc, MakeOpts) end,
+    case lists:foldl(MFun, [], MakeOpts) of
+        [] ->
+            Combined;
+        AddOpts ->
+            Combined2 = lists:keydelete(make_options, 1, Combined),
+            [{make_options, MakeOpts ++ AddOpts} | Combined2]
+    end.
+
+do_mk_option({pa, Path}, Acc, _MakeOpts) ->
+    true = code:add_patha(Path),
+    Acc;
+do_mk_option({load_mk_plugin, Src}, Acc, MakeOpts) ->
+    {Module, Binary} = erl_compile(Src),
+    case code:load_binary(Module, Module, Binary) of
+        {module, Mod} ->
+            io:format("OK~n"),
+            [{mk_plugin, Mod, Mod:init(MakeOpts)}|Acc];
+        {error, _} = Err ->
+            Msg = "Error when loading module '~p': ~p~nAborting.~n",
+            io:format(Msg, [Module, Err]),
+            halt(1)
+    end;
+do_mk_option(_, Acc, _MakeOpts) ->
+    Acc.
+
+erl_compile(Src) ->
+    io:format("Loading '~s'... ", [Src]),
+    case compile:file(Src,  [verbose, binary, report, {i, "lib"}]) of
+        {ok, ModuleName, Binary} -> {ModuleName, Binary};
+        {ok, ModuleName, Binary, _Warnings} -> {ModuleName, Binary};
+        {error, _Err, _Warn} -> halt(1);
+        error -> halt(1)
+    end.
 
 %%------------------------------------------------------------------------------
 
@@ -490,14 +525,8 @@ format_rm(_, _, {_, L}) -> {error, bin_join(L, <<"\n">>, [])}.
 
 execute_mk(OPath, Opts) ->
     Path = binary_to_list(OPath),
-    SrcPath = filename:join(Path, "src"),
-    case filelib:is_dir(SrcPath) of
-        true -> compile(SrcPath, filename:join(Path, "ebin"), Opts);
-        false -> {ok, [<<"No 'src' folder in '">>, Path, <<"', ignoring.\n">>]}
-    end.
-
-compile(SrcPath, DstPath, Opts) ->
-    CompilerOpts = proplists:get_value(compiler_options, Opts, []),
-    bld_load:compile(SrcPath, DstPath, CompilerOpts).
+    Combined = proplists:get_value(combined_profile, Opts, []),
+    bld_make:compile(Path, Combined).
 
 %%------------------------------------------------------------------------------
+
