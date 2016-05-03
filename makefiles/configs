@@ -54,16 +54,14 @@ bin/%:
 bin_files = bin/start.boot bin/start.script \
   bin/start_clean.boot bin/start_sasl.boot
 
-.PHONY: do-apps compile bld_deps qcompile bld_deps_test test_compile
+.PHONY: do-apps bld_deps compile bld_deps_test test_compile
 
 do-apps: $(foreach app_name,$(App_Names),$(app_name:%=%.app))
-
-compile: compile-deps do-apps $(a_appup_dests) dev_files
 
 bld_deps:
 	./bin/deps.esh mk
 
-qcompile: compile-deps bld_deps $(a_appup_dests) dev_files
+compile: compile-deps bld_deps do-apps $(a_appup_dests) dev_files
 
 bld_deps_test:
 	./bin/deps.esh mk -p test
@@ -100,9 +98,6 @@ apps: $(foreach d_app_name,$(App_Names),$(d_app_file)) $(a_appup_dests)
 	@echo Done!
 
 dev: compile $(DEV_BUILD_DONE) $(REBAR)
-	@echo Done! Use \'./bin/init.esh\' to install and then \'./bin/start.esh\' to boot.
-
-qdev: qcompile $(DEV_BUILD_DONE) $(REBAR)
 	@echo Done! Use \'./bin/init.esh\' to install and then \'./bin/start.esh\' to boot.
 
 rel: compile $(REL_BUILD_DONE) $(REBAR) rel_files

@@ -233,3 +233,5 @@ delete_type({File, file}) -> bld_lib:rm_file(File).
 
 add_link(MainFile, Bin, Base) ->
     bld_lib:mk_link(MainFile, filename:join(Bin, Base ++ ".esh")).
+
+%%------------------------------------------------------------------------------

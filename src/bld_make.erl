@@ -25,6 +25,7 @@
 -module(bld_make).
 
 -export([boot/2, compile/2]).
+-export([start_serializer/0, stop_serializer/0]).
 
 -include_lib("kernel/include/file.hrl").
 -include("../include/load_builderl.hrl").
@@ -34,21 +35,58 @@
 -record(opts, {mk_plugin, mk_state, make_opts, compiler_opts}).
 
 boot(Path, Root) ->
+    start_serializer(),
     try
         CompilerOpts = [{erl, [verbose, report, {i, Root}, {i, "lib"}]}],
         compile_dep(Path, [load], CompilerOpts, undefined, ok)
     catch
         throw:Err -> io:format(standard_io, handle_err(Err), []), halt(1)
-    end.
+    end,
+    stop_serializer().
 
 compile(Path, Combined) ->
     try
         {MakeOpts, CompilerOpts} = get_options(Combined),
         compile_dep(Path, MakeOpts, CompilerOpts)
     catch
-        throw:{stop, Type, Mod, Fun, Path} -> ret_stopped(Type, Mod, Fun, Path);
+        throw:{stop, Type, Mod, Fun, P} -> ret_stopped(Type, Mod, Fun, P);
         throw:Err -> {error, handle_err(Err)}
     end.
+
+start_serializer() ->
+    Pid = spawn(fun serializer/0),
+    true = register('$bld_print', Pid).
+
+stop_serializer() ->
+    '$bld_print' ! {self(), stop},
+    receive ok -> ok end.
+
+%%------------------------------------------------------------------------------
+
+serializer() ->
+    receive
+        {Pid, stop} ->
+            Pid ! ok;
+        Msg ->
+            (catch print_msg(Msg)) =:= ok orelse
+                io:format("Couldn't print '~p', ignoring.~n", [Msg]),
+            serializer()
+    end.
+
+print_msg({Msg}) -> io:format(Msg);
+print_msg({Msg, Args}) -> io:format(Msg, Args);
+print_msg({error, Msg, Args}) -> io:format(standard_error, Msg, Args);
+print_msg(Lines) when is_list(Lines) -> io:format(Lines, []).
+
+format_msg(IsWarning, List) ->
+    [format_line(IsWarning, File, L) || {File, Lines} <- List, L <- Lines].
+
+format_line(IsWarning, File, {Line, Module, Info}) ->
+    [File, <<":">>, integer_to_list(Line), <<": ">>, get_warning(IsWarning),
+     Module:format_error(Info), <<"\n">>].
+
+get_warning(false) -> <<"">>;
+get_warning(true) -> <<"Warning: ">>.
 
 %%------------------------------------------------------------------------------
 
@@ -67,18 +105,18 @@ compile_dep(Path, MakeOpts, CompilerOpts) ->
                 stop -> ret_stopped(Mod, <<"handle_dep_mk/2">>, Path);
                 NState -> compile_dep(Path, MakeOpts, CompilerOpts, Mod, NState)
             end
-    end,
-    {ok, [<<"  => Finished compiling in ">>, Path, <<"\n">>]}.
+    end.
 
 ret_stopped(Mod, Fun, Path) ->
-    ret_rest([<<"Compilation of '">>, Path, <<"' stopped">>], Mod, Fun).
+    ret_rest([<<"compilation of '">>, Path], Mod, Fun).
 
 ret_stopped(Type, Mod, Fun, Path) ->
-    Msg = [<<"Compilation of '">>, Type, <<"' stopped for '">>, Path, <<"'">>],
-    ret_rest(Msg, Mod, Fun).
+    M = [<<"'">>, atom_to_binary(Type, utf8), <<"' compilation for '">>, Path],
+    ret_rest(M, Mod, Fun).
 
 ret_rest(Msg, Mod, Fun) ->
-    {ok, Msg ++ [<<" in '">>, Mod, <<":">>, Fun, <<"'.\n">>]}.
+    {ok, [<<"  => Stopped ">>] ++ Msg ++
+         [<<"' by '">>, atom_to_binary(Mod, utf8), <<":">>, Fun, <<"'.\n">>]}.
 
 compile_dep(Path, MakeOpts, CompilerOpts, Mod, State) ->
     SrcPath = filename:join(Path, "src"),
@@ -93,7 +131,8 @@ compile_src(Path, SrcPath, MakeOpts, CompilerOpts, Mod, State) ->
     Opts = #opts{mk_plugin = Mod, mk_state = State,
                  make_opts = MakeOpts, compiler_opts = ErlOpts},
     if Mod =/= undefined -> do_handle_dep_mk(Path, SrcPath, DstPath, Opts);
-       true -> compile_erl(SrcPath, DstPath, Opts) end.
+       true -> compile_erl(SrcPath, DstPath, Opts) end,
+    {ok, [<<"  => Finished compiling in '">>, Path, <<"'.\n">>]}.
 
 do_handle_dep_mk(Path, SrcPath, DstPath, Opts) ->
     #opts{mk_plugin = Mod, mk_state = State} = Opts,
@@ -101,8 +140,8 @@ do_handle_dep_mk(Path, SrcPath, DstPath, Opts) ->
         stop ->
             throw({stop, erl, Mod, <<"handle_dep_mk/4">>, Path});
         {ignore, NState} ->
-            Msg = "  ERL: Compilation in '~s' ignored by ~s:handle_dep_mk/4.~n",
-            io:format(Msg, [Path, Mod]),
+            Msg = "  => Ignored compilation of '~s' by '~s:handle_dep_mk/4'.~n",
+            '$bld_print' ! {Msg, [Path, Mod]},
             Opts#opts{mk_state = NState};
         {NErlOpts, NState} ->
             NOpts = Opts#opts{mk_state = NState, compiler_opts = NErlOpts},
@@ -198,10 +237,11 @@ do_compile_module(Dep, Name, Opts) ->
 do_handle_src_mk(Src, #opts{mk_plugin = Mod, mk_state = State} = Opts) ->
     case Mod:handle_src_mk(erl, Src, Opts#opts.compiler_opts, State) of
         stop ->
-            throw({stop, erl, Mod, <<"handle_src_mk/4">>, Src});
+            throw({stop, erl, Mod, <<"handle_src_mk/4">>, Src ++ ".erl"});
         {ignore, NState} ->
-            Msg = "  ERL: Compilation of '~s' ignored by ~s:handle_src_mk/4.~n",
-            io:format(Msg, [Src, Mod]),
+            Msg = "  => Ignored compilation of '~s.erl' by "
+                "'~s:handle_src_mk/4'.~n",
+            '$bld_print' ! {Msg, [Src, Mod]},
             Opts#opts{mk_state = NState};
         {NErlOpts, NState} ->
             do_compile_module(Src, NErlOpts),
@@ -211,24 +251,26 @@ do_handle_src_mk(Src, #opts{mk_plugin = Mod, mk_state = State} = Opts) ->
 do_compile_module(Src, ErlOpts) ->
     case compile:file(Src, ErlOpts) of
         {ok, _Module} ->
-            io:format("  ERL: Compiled '~s'.~n", [Src]);
-        {ok, _Module, Warnings} ->
-            Msg = "  ERL: Compiled '~s',~n=> Warnings: ~p.~n",
-            io:format(Msg, [Src, Warnings]);
+            '$bld_print' ! {"  ERL: Compiled '~s.erl'.~n", [Src]};
+        {ok, _Module, []} ->
+            '$bld_print' ! {"  ERL: Compiled '~s.erl'.~n", [Src]};
+        {ok, _Module, Warn} ->
+            '$bld_print' ! format_msg(true, Warn) ++
+                [<<"  ERL: Compiled '">>, Src, <<".erl' with warnings!\n">>];
         {error, Err, Warn} ->
-            Msg = "!Ignored '~s',~n=> Warnings: ~p,~n=> Errors: ~p.~n",
-            io:format(Msg, [Src, Warn, Err]),
+            '$bld_print' ! format_msg(false, Err) ++ format_msg(true, Warn) ++
+                [<<"!Ignored '">>, Src, <<"erl' because of errors.\n">>],
             throw({compile_error, Src});
         error ->
-            Msg = "!Ignored '~s',~n=> Unknown error encountered!.~n",
-            io:format(Msg, [Src]),
+            Msg = "!Ignored '~s.erl' because of an unknown error.~n",
+            '$bld_print' ! {Msg, [Src]},
             throw({compile_error, Src})
     end.
 
 remove_module(Dst, Name) ->
     File = filename:join(Dst, Name ++ ".beam"),
     case file:delete(File) of
-        ok -> io:format("  !Deleted '~s'.~n", [File]);
+        ok -> '$bld_print' ! {"  !Deleted '~s'.~n", [File]};
         {error, Err} -> throw({delete, File, Err})
     end.
 
@@ -273,7 +315,7 @@ write_app(_Src, Dst, Modules, {ok, {App, Name, List}}) ->
     NewList = list_replace(List, Term, {modules, Modules}, []),
     AppOut = io_lib:format("~p.~n", [{App, Name, NewList}]),
     case file:write_file(Dst, AppOut) of
-        ok -> io:format("  APP: Created '~s'.~n", [Dst]);
+        ok -> '$bld_print' ! {"  APP: Created '~s'.~n", [Dst]};
         {error, Err} -> throw({write_error, Dst, Err})
     end;
 write_app(Src, _Dst, _Modules, Other) ->
@@ -291,14 +333,14 @@ list_modules(Path) ->
     [list_to_atom(X) || X <- Modules].
 
 load_modules(Path, Modules) ->
-    io:format("Loaded:"),
+    '$bld_print' ! {"Loaded:"},
     lists:foreach(fun(X) -> do_load_module(Path, X) end, Modules),
-    io:format("~n").
+    '$bld_print' ! {"~n"}.
 
 do_load_module(Path, Module) ->
     File = filename:join(Path, Module),
     case code:load_abs(File) of
-        {module, Mod} -> io:format(" ~s", [Mod]);
+        {module, Mod} -> '$bld_print' ! {" ~s", [Mod]};
         {error, Err} -> throw({load_error, File, Err})
     end.
 

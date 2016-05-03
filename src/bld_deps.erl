@@ -196,12 +196,15 @@ do_start(Opts0) ->
     Opts1 = process_make_profiles(lists:member(mk, Cmds), Opts0),
     {Opts2, Repos, Deps} = process_deps(Opts1),
 
+    bld_make:start_serializer(),
     CmdsTxt = string:join([atom_to_list(X) || X <- Cmds], "; "),
     DirsTxt = string:join(Repos, " "),
     io:format("=== Executing: '~s' in repositories: ~s~n", [CmdsTxt, DirsTxt]),
     Fun = fun(X) -> execute(Cmds, X, Opts2) end,
     Res0 = lists:flatten(bld_lib:call(Fun, Deps)),
     Res1 = [X || {Cmd, _} = X <- Res0, Cmd =/= st],
+    bld_make:stop_serializer(),
+
     case lists:keymember(error, 2, Res1) of
         false ->
             io:format("=== All finished, result OK.~n");
@@ -289,7 +292,7 @@ do_mk_option({load_mk_plugin, Src}, Acc, MakeOpts) ->
     {Module, Binary} = erl_compile(Src),
     case code:load_binary(Module, Module, Binary) of
         {module, Mod} ->
-            io:format("OK~n"),
+            io:format("Loaded.~n~n"),
             [{mk_plugin, Mod, Mod:init(MakeOpts)}|Acc];
         {error, _} = Err ->
             Msg = "Error when loading module '~p': ~p~nAborting.~n",
@@ -300,13 +303,16 @@ do_mk_option(_, Acc, _MakeOpts) ->
     Acc.
 
 erl_compile(Src) ->
-    io:format("Loading '~s'... ", [Src]),
+    io:format("Compiling and loading '~s.erl':~n", [Src]),
     case compile:file(Src,  [verbose, binary, report, {i, "lib"}]) of
         {ok, ModuleName, Binary} -> {ModuleName, Binary};
         {ok, ModuleName, Binary, _Warnings} -> {ModuleName, Binary};
-        {error, _Err, _Warn} -> halt(1);
-        error -> halt(1)
+        {error, _Err, _Warn} -> halt_aborting();
+        error -> halt_aborting()
     end.
+
+halt_aborting() ->
+    io:format("Aborting due to errors!~n"), halt(1).
 
 %%------------------------------------------------------------------------------
 
@@ -529,4 +535,3 @@ execute_mk(OPath, Opts) ->
     bld_make:compile(Path, Combined).
 
 %%------------------------------------------------------------------------------
-
