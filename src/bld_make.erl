@@ -39,7 +39,8 @@ boot(Path, Root) ->
     start_serializer(),
     try
         CompilerOpts = [{erl, [verbose, report, {i, Root}, {i, "lib"}]}],
-        compile_dep(Path, [load], CompilerOpts, undefined, ok)
+        compile_dep(Path, [], CompilerOpts, undefined, ok),
+        load_modules(get_dst_path(Path))
     catch
         throw:Err -> io:format(standard_io, handle_err(Err), []), halt(1)
     end,
@@ -92,6 +93,23 @@ get_line(Integer) -> integer_to_list(Integer).
 get_warning(false) -> <<"">>;
 get_warning(true) -> <<"Warning: ">>.
 
+get_dst_path(Path) -> filename:join(Path, "ebin").
+
+list_modules(P) ->
+    [list_to_atom(filename:rootname(X)) || X <- filelib:wildcard("*.beam", P)].
+
+load_modules(DstPath) ->
+    '$bld_print' ! {"Loaded:"},
+    lists:foreach(fun(X) -> load_mod(DstPath, X) end, list_modules(DstPath)),
+    '$bld_print' ! {"~n"}.
+
+load_mod(DstPath, Module) ->
+    File = filename:join(DstPath, Module),
+    case code:load_abs(File) of
+        {module, Mod} -> '$bld_print' ! {" ~s", [Mod]};
+        {error, Err} -> throw({load_error, File, Err})
+    end.
+
 %%------------------------------------------------------------------------------
 
 get_options(Combined) ->
@@ -132,8 +150,7 @@ compile_dep(Path, MakeOpts, CompilerOpts, Mod, State) ->
     end.
 
 compile_dep(Path, SrcPath, MakeOpts, CompilerOpts, Mod, State) ->
-    DstPath = filename:join(Path, "ebin"),
-    Res = file:make_dir(DstPath),
+    Res = file:make_dir(DstPath = get_dst_path(Path)),
     Res =:= ok orelse Res =:= {error, eexist}
         orelse throw({mk_dir, DstPath, element(2, Res)}),
 
@@ -295,25 +312,10 @@ remove_module(Dst) ->
 %%------------------------------------------------------------------------------
 
 process_app(App, MaxMTime, DstPath, Opts) ->
-    All = filelib:wildcard("*.beam", DstPath),
-    Modules = [list_to_atom(filename:rootname(X)) || X <- All],
-    lists:member(load, Opts#opts.make_opts) =:= false
-        orelse load_modules(DstPath, Modules),
-
-    AppDst = list_file(filename:join(DstPath, App#fi.base ++ ".app")),
-    AppSrc = {App#fi.file, App#fi.mtime},
-    compile_app(Opts#opts.redo_app =:= true, AppSrc, AppDst, MaxMTime, Modules).
-
-load_modules(Path, Modules) ->
-    '$bld_print' ! {"Loaded:"},
-    lists:foreach(fun(X) -> do_load_module(Path, X) end, Modules),
-    '$bld_print' ! {"~n"}.
-
-do_load_module(Path, Module) ->
-    File = filename:join(Path, Module),
-    case code:load_abs(File) of
-        {module, Mod} -> '$bld_print' ! {" ~s", [Mod]};
-        {error, Err} -> throw({load_error, File, Err})
+    {DstApp, MTime} = list_file(filename:join(DstPath, App#fi.base ++ ".app")),
+    case should_create_app(Opts#opts.redo_app, App#fi.mtime, MTime, MaxMTime) of
+        true -> do_create_app(App#fi.file, DstApp, DstPath);
+        false -> ok
     end.
 
 list_file(DstApp) ->
@@ -322,40 +324,35 @@ list_file(DstApp) ->
         {error, enoent} -> {DstApp, undefined}
     end.
 
-compile_app(true, {Src, _}, {Dst, _}, _MaxMTime, Modules) ->
-    do_compile_app(Src, Dst, Modules);
-compile_app(false, {Src, _}, {Dst, undefined}, _MaxMTime, Modules) ->
-    do_compile_app(Src, Dst, Modules);
-compile_app(false, {Src, SrcTime}, {Dst, DstTime}, MaxMTime, Modules)
-  when MaxMTime >= DstTime; SrcTime >= DstTime ->
-    do_compile_app(Src, Dst, Modules);
-compile_app(false, _, _, _, _) ->
-    ok.
+should_create_app(true, _, _, _Max) -> true;
+should_create_app(_, _, undefined, _Max) -> true;
+should_create_app(_, ST, DT, Max) when Max >= DT; ST >= DT -> true;
+should_create_app(_, _, _, _) -> false.
 
-do_compile_app(Src, Dst, Modules) ->
+do_create_app(Src, Dst, DstPath) ->
     case file:read_file(Src) of
-        {ok, Bin} -> scan_app(Src, Dst, Modules, Bin);
+        {ok, Bin} -> scan_app(Src, Dst, DstPath, Bin);
         {error, Err} -> throw({app_src, Src, Err})
     end.
 
-scan_app(Src, Dst, Modules, OBin) ->
+scan_app(Src, Dst, DstPath, OBin) ->
     Pat = <<"=MODULES=|%MODULES%|{{modules}}">>,
     To = io_lib:format("~p", [?BLD_APP_MOD_RE]),
     Bin = iolist_to_binary(re:replace(OBin, Pat, To)),
     case erl_scan:string(binary_to_list(Bin)) of
-        {ok, Tks, _} -> write_app(Src, Dst, Modules, erl_parse:parse_term(Tks));
+        {ok, Tks, _} -> write_app(Src, Dst, DstPath, erl_parse:parse_term(Tks));
         {error, Err, Loc} -> throw({scan_error, Src, Err, Loc})
     end.
 
-write_app(_Src, Dst, Modules, {ok, {App, Name, List}}) ->
+write_app(_Src, Dst, DstPath, {ok, {App, Name, List}}) ->
     Term = {modules, [?BLD_APP_MOD_RE]},
-    NewList = list_replace(List, Term, {modules, Modules}, []),
+    NewList = list_replace(List, Term, {modules, list_modules(DstPath)}, []),
     AppOut = io_lib:format("~p.~n", [{App, Name, NewList}]),
     case file:write_file(Dst, AppOut) of
         ok -> '$bld_print' ! {"  APP: Created '~s'.~n", [Dst]};
         {error, Err} -> throw({write_error, Dst, Err})
     end;
-write_app(Src, _Dst, _Modules, Other) ->
+write_app(Src, _Dst, _DstPath, Other) ->
     throw({parse_error, Src, Other}).
 
 list_replace([What|T], What, To, Acc) -> list_replace(T, What, To, [To|Acc]);

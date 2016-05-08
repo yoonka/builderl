@@ -1,0 +1,203 @@
+# -*- mode: Makefile -*-
+
+# Copyright (c) 2015-2016, Peter-Henry Mander and Grzegorz Junka
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+# * Redistributions of source code must retain the above copyright notice, this
+#   list of conditions and the following disclaimer.
+#
+# * Redistributions in binary form must reproduce the above copyright notice,
+#   this list of conditions and the following disclaimer in the documentation
+#   and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+#-------------------------------------------------------------------------------
+
+# NOTE: The use of wildcard and realpath depend on the paths actually
+#       existing in the filesystem at the time of invocation. This precludes
+#       these functions from use in deferred variable assignment, where the
+#       paths are targets of rules that may not have fired yet.
+#
+# NOTE: This version of the Makefile implements the GNUmake remake feature,
+#       which generates dependency files to describe which include files in
+#       addition to the source file, are needed to compile the target.
+#
+#       http://make.paulandlesley.org/autodep.html
+#       http://stackoverflow.com/questions/554742/reevaluate-makefile-variables
+#
+# NOTE: By setting the environment variable $MAKE_GOAL, the target can be
+#       changed from the default goal. This trick enables the use of
+#       the Unix 'script' with the $SHELL environment set to SHELL=make, and
+#       with MAKE_GOAL=run it starts an Erlang shell with the -pa paths set.
+#       All interaction and output is then logged using 'script'. E.g:
+#
+#       MAKE_GOAL=run SHELL=$(which make) script -a "$LOG"
+
+p_name = $(firstword $(subst /, ,$*))
+p_ins_mod = $(subst $(space),$(comma),$($(p_name)_modules:%=\'%\'))
+p_vsn = $($(p_name)_has_vsn)
+
+lib/%.app:
+	@rm -f $(DEV_BUILD_DONE)
+	@mkdir -p $(dir $@)
+	sed -e \
+	  "s|%MODULES%|=MODULES=|g;s|%VSN%|=VSN=|g;s|{{modules}}|=MODULES=|g;s|{{vsn}}|=VSN=|g" < "$^" | \
+	sed -e \
+	  "s|=APP=|$(p_name)|g;s|=MODULES=|$(p_ins_mod)|g;s|=VSN=|$(p_vsn)|g" \
+	  > "$@"
+
+lib/%.appup:
+	ln -s ../src/$(notdir $*).appup.src $@
+
+d_module = $*
+d_erl_dep = $(d_module:%=$(dep_dir)%.erl.d)
+d_erl = $($(d_module:%=%_module_erl))
+d_beam = $($(d_module:%=%_module_beam))
+d_dir = $(dir $(d_erl))
+d_src_headers = $(shell sed -n $(include_regexp) < $(d_erl))
+d_include = $(d_src_headers:%=$(d_dir)%)
+d_lib_headers = $(shell sed -n $(include_lib_regexp) < $(d_erl))
+d_include_lib = $(wildcard $(d_lib_headers:%=lib/%))
+d_include_files = $(d_include) $(d_include_lib)
+
+d_parse_xform_mod = $(shell sed -n $(parse_transform_regexp) < $(d_erl))
+
+d_parse_xform_beams = \
+  $(foreach mod_name, $(d_parse_xform_mod),\
+    $($(mod_name:%=%_module_beam)))
+
+d_parse_xform_apps = \
+  $(filter-out $($($(d_module)_app)_app_dependencies), $(XFORM_BEAMS))
+
+d_parse_xform_dep = \
+  $(d_beam): $(d_erl) $(d_include_files) $(d_parse_xform_beams) $(d_parse_xform_apps)
+
+#
+# NOTE: the %.erl.d file contents depends entirely on what files the .erl
+#        file includes. If the header files change or disappear, it is no
+#        matter for the %.erl.d file: only changes in the .erl file matter
+#        to it.
+#
+# BUGBUG: If a .erl source file is moved from one application to another,
+#         the dependency change is not detected. Trying to force a refresh
+#         of the .erl.d file with `make depend` fails with:
+#
+#         "cannot stat 'XXX.erl': No such file or directory"
+#
+#         The $(d_dir) dependency does not cope with the removal and
+#         relocation of a .erl file. Deleting the .erl.d file is a remedy.
+#
+#         Also related: the .app file of application where the .erl file is
+#         moved to is not regenerated.  This may be due to =MODULES= not
+#         changing, even if a module is added to the application.  Remedy:
+#         Deleting the relevant lib/*/ebin/*.app file will force a rebuild.
+#
+tmp/dependencies/%.erl.d:
+	@mkdir -p $(dir $@)
+	@echo "$(d_erl_dep): $(d_erl) $(d_dir)" > $(d_erl_dep)
+	@echo >> $(d_erl_dep)
+	@echo "$(d_parse_xform_dep)" >> $(d_erl_dep)
+	@echo >> $(d_erl_dep)
+	@echo ".PHONY: $(notdir $(d_beam))" >> $(d_erl_dep)
+	@echo "$(notdir $(d_beam)): $(d_beam)" >> $(d_erl_dep)
+	@echo >> $(d_erl_dep)
+
+d_app_name = $*
+d_app_dep = $(d_app_name:%=$(dep_dir)%.app.d)
+d_app_prereq = $($(d_app_name)_app_dependencies)
+d_app_target = $(d_app_name:%=%.app)
+d_app_src_dir = $(d_app_name:%=lib/%/src/)
+d_app_svn_mk = $(d_app_src_dir:%=%vsn.mk)
+d_app_src_file = $($(d_app_name)_src_file)
+d_app_file = $($(d_app_name)_file)
+
+#
+# BUGBUG: the $(d_app_dep): $(d_app_prereq) rule is far too broad
+#         In the .erl.d file, the .beam prerequisites are handled.
+#
+# NOTE: The %.app.d ought to depend on the .erl.d files and the MIBS,
+#       etc. I.e. source files, not the beam files.
+#
+tmp/dependencies/%.app.d:
+	@mkdir -p $(dir $@)
+	@echo "$(d_app_dep): $(d_app_src_dir) $(d_app_svn_mk)" > $(d_app_dep)
+	@echo >> $(d_app_dep)
+	@echo ".PHONY: $(d_app_target)" >> $(d_app_dep)
+	@echo "$(d_app_target): $(d_app_prereq)" >> $(d_app_dep)
+	@echo >> $(d_app_dep)
+	@echo "$(d_app_file): $(d_app_src_file)" >> $(d_app_dep)
+	@echo >> $(d_app_dep)
+
+d_plt_dep = $(d_app_name:%=$(dep_dir)app.%.plt.d)
+d_app_plt = $(d_app_name:%=tmp/app.%.plt)
+d_app_modules = $(foreach app_name,$(d_app_name),$(App_Beam_Files))
+
+tmp/dependencies/app.%.plt.d:
+	@mkdir -p $(dir $@)
+	@echo "$(d_app_plt): $(d_app_modules)" >> $(d_plt_dep)
+
+#
+# NOTE: implicit rule to compile beam files from erl source.
+#
+w_match = $*
+w_app_part = $(firstword $(subst /ebin/, ,$(w_match)))
+w_mod_part = $(lastword $(subst /ebin/, ,$(w_match)))
+w_module = $(w_app_part)$(dep_separator)$(w_mod_part)
+w_src = $($(w_module:%=%_module_erl))
+w_vsn = $($(w_module:%=%_app_vsn))
+
+lib/%.beam:
+	@mkdir -p $(dir $@)
+	$(ERLC) \
+	  $(ERLCFLAGS) \
+	  -DCOMPILE_TIME_STAMP='"$(DATE_NOW)"'\
+	  -DOTP_REL_VSN='$(OTP_REL_VSN)'\
+	  -I lib -I deps \
+	  -o $(dir $@) \
+	  $(w_src)
+
+bin_file = $(mib_name:%=$(App_Mibs_Dir)%.bin)
+mib_file = $(mib_name:%=$(App_Src_Dir)%.mib)
+mib_depend = $(filter $(App_Mibs), $(shell sed -n $(mib_regexp) < $(mib_file)) )
+
+mib_dep_files = $(mib_depend:%=$(App_Mibs_Dir)%.bin)
+
+#
+# NOTE: Rule to compile MIB files into .bin files. The mib_dep_files are
+#       obtained using sed and the mib_regexp above. Create one rule for
+#       each MIB file.
+#
+define app_mib_rule
+$(bin_file): $(mib_file) $(mib_dep_files)
+	@mkdir -p $$(dir $$@)
+	$$(ERLC) -I $$(dir $$@) -o $$(dir $$@) $$<
+endef
+
+$(foreach app_name, $(App_Names), $(foreach mib_name, $(App_Mibs), $(eval $(app_mib_rule)) ) )
+
+erl_suffix = $(mod_name:%=$(app_name)\$(dep_separator)%.erl.d)
+erl_dep_file = $(addprefix $(dep_dir),$(erl_suffix))
+app_dep_file = $(app_name:%=$(dep_dir)%.app.d)
+app_plt_file = $(app_name:%=$(dep_dir)app.%.plt.d)
+
+application_dep_files = \
+  $(foreach mod_name, $(App_Modules), $(erl_dep_file)) $(app_dep_file) $(app_plt_file)
+
+all_dep_files = $(foreach app_name, $(App_Names), $(application_dep_files))
+
+# Don't create dependency files for those targets
+ifneq ($(MAKECMDGOALS),$(filter $(MAKECMDGOALS),clean get-deps rm-deps))
+-include $(all_dep_files)
+endif

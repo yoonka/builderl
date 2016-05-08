@@ -1,6 +1,6 @@
 # -*- mode: Makefile -*-
 
-# Copyright (c) 2015-2016, Peter-Henry Mander and Grzegorz Junka
+# Copyright (c) 2015-2016, Grzegorz Junka
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -23,181 +23,165 @@
 # CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+./rebar:
+	$(ERL) -noshell -s inets -s ssl \
+	  -eval 'httpc:request(get, {"$(REBARURL)", []}, [], [{stream, "./rebar"}])' \
+	  -s init stop
+	chmod +x ./rebar
+
+## Take the local version if present, then check if it is installed, then download if none could be found
+REBAR=$(shell (type ./rebar 2>/dev/null || type rebar 2>/dev/null || echo ./rebar) | tail -1 | awk '{ print $$NF }')
+
+.PHONY: get-deps rm-deps redo-deps compile-deps clean-deps check-rebar
+get-deps: $(REBAR)
+	$(REBAR) get-deps
+	./bin/deps.esh get
+
+rm-deps: $(REBAR)
+	$(REBAR) del-deps
+	./bin/deps.esh rm
+
+redo-deps: $(REBAR)
+	$(REBAR) del-deps
+	$(REBAR) get-deps
+	./bin/deps.esh rm get
+
+compile-deps: $(REBAR)
+	$(REBAR) compile
+
+clean-deps: $(REBAR)
+	$(REBAR) clean
+
+check-rebar: $(REBAR)
+
+.PHONY: bld_deps
+bld_deps: compile-deps
+	./bin/deps.esh mk
+
+bld_deps_%: compile-deps
+	./bin/deps.esh mk -p $*
+
 #-------------------------------------------------------------------------------
 
-# NOTE: The use of wildcard and realpath depend on the paths actually
-#       existing in the filesystem at the time of invocation. This precludes
-#       these functions from use in deferred variable assignment, where the
-#       paths are targets of rules that may not have fired yet.
-#
-# NOTE: This version of the Makefile implements the GNUmake remake feature,
-#       which generates dependency files to describe which include files in
-#       addition to the source file, are needed to compile the target.
-#
-#       http://make.paulandlesley.org/autodep.html
-#       http://stackoverflow.com/questions/554742/reevaluate-makefile-variables
-#
-# NOTE: By setting the environment variable $MAKE_GOAL, the target can be
-#       changed from the default goal. This trick enables the use of
-#       the Unix 'script' with the $SHELL environment set to SHELL=make, and
-#       with MAKE_GOAL=run it starts an Erlang shell with the -pa paths set.
-#       All interaction and output is then logged using 'script'. E.g:
-#
-#       MAKE_GOAL=run SHELL=$(which make) script -a "$LOG"
+clean_app_dirs = $(strip \
+  $(foreach app_name, $(App_Names), lib/$(app_name)/ebin lib/$(app_name)/priv/mibs ) )
 
-p_name = $(firstword $(subst /, ,$*))
-p_ins_mod = $(subst $(space),$(comma),$($(p_name)_modules:%=\'%\'))
-p_vsn = $($(p_name)_has_vsn)
+clean_editor_backup = \
+  $(wildcard lib/*/src/*~) \
+  $(wildcard lib/*/include/*~) \
+  $(wildcard *~)
 
-lib/%.app:
-	@rm -f $(DEV_BUILD_DONE)
-	@mkdir -p $(dir $@)
-	sed -e \
-	  "s|%MODULES%|=MODULES=|g;s|%VSN%|=VSN=|g;s|{{modules}}|=MODULES=|g;s|{{vsn}}|=VSN=|g" < "$^" | \
-	sed -e \
-	  "s|=APP=|$(p_name)|g;s|=MODULES=|$(p_ins_mod)|g;s|=VSN=|$(p_vsn)|g" \
-	  > "$@"
+.PHONY: dep-clean clean-logs clean-dev clean-rel clean-tgz clean
 
-lib/%.appup:
-	ln -s ../src/$(notdir $*).appup.src $@
+dep-clean:
+	rm -rf $(dep_dir)
 
-d_module = $*
-d_erl_dep = $(d_module:%=$(dep_dir)%.erl.d)
-d_erl = $($(d_module:%=%_module_erl))
-d_beam = $($(d_module:%=%_module_beam))
-d_dir = $(dir $(d_erl))
-d_src_headers = $(shell sed -n $(include_regexp) < $(d_erl))
-d_include = $(d_src_headers:%=$(d_dir)%)
-d_lib_headers = $(shell sed -n $(include_lib_regexp) < $(d_erl))
-d_include_lib = $(wildcard $(d_lib_headers:%=lib/%))
-d_include_files = $(d_include) $(d_include_lib)
+clean-tgz:
+	rm -f $(REL_PATH)/../*.tgz
 
-d_parse_xform_mod = $(shell sed -n $(parse_transform_regexp) < $(d_erl))
+clean-rel:
+	rm -rf $(REL_PATH)
+	rm -f $(REL_BUILD_DONE)
+	rm -f $(RELEASE_DATA)
 
-d_parse_xform_beams = \
-  $(foreach mod_name, $(d_parse_xform_mod),\
-    $($(mod_name:%=%_module_beam)))
+clean-dev:
+	rm -rf releases/$(Rel_Vsn)
+	rm -rf releases/start_erl.data
+	rm -f $(bin_files)
+	rm -f $(DEV_BUILD_DONE) $(BUILD_INFO) $(LOCAL_VM_ARGS)
 
-d_parse_xform_apps = \
-  $(filter-out $($($(d_module)_app)_app_dependencies), $(XFORM_BEAMS))
+clean: dep-clean clean-tgz clean-rel clean-dev clean-deps
+	rm -rf $(clean_app_dirs) $(clean_editor_backup)
 
-d_parse_xform_dep = \
-  $(d_beam): $(d_erl) $(d_include_files) $(d_parse_xform_beams) $(d_parse_xform_apps)
+.PHONY: clean-builderl
+clean-builderl:
+	rm $(BLDERLPATH)/ebin/*
 
-#
-# NOTE: the %.erl.d file contents depends entirely on what files the .erl
-#        file includes. If the header files change or disappear, it is no
-#        matter for the %.erl.d file: only changes in the .erl file matter
-#        to it.
-#
-# BUGBUG: If a .erl source file is moved from one application to another,
-#         the dependency change is not detected. Trying to force a refresh
-#         of the .erl.d file with `make depend` fails with:
-#
-#         "cannot stat 'XXX.erl': No such file or directory"
-#
-#         The $(d_dir) dependency does not cope with the removal and
-#         relocation of a .erl file. Deleting the .erl.d file is a remedy.
-#
-#         Also related: the .app file of application where the .erl file is
-#         moved to is not regenerated.  This may be due to =MODULES= not
-#         changing, even if a module is added to the application.  Remedy:
-#         Deleting the relevant lib/*/ebin/*.app file will force a rebuild.
-#
-tmp/dependencies/%.erl.d:
-	@mkdir -p $(dir $@)
-	@echo "$(d_erl_dep): $(d_erl) $(d_dir)" > $(d_erl_dep)
-	@echo >> $(d_erl_dep)
-	@echo "$(d_parse_xform_dep)" >> $(d_erl_dep)
-	@echo >> $(d_erl_dep)
-	@echo ".PHONY: $(notdir $(d_beam))" >> $(d_erl_dep)
-	@echo "$(notdir $(d_beam)): $(d_beam)" >> $(d_erl_dep)
-	@echo >> $(d_erl_dep)
+#-------------------------------------------------------------------------------
 
-d_app_name = $*
-d_app_dep = $(d_app_name:%=$(dep_dir)%.app.d)
-d_app_prereq = $($(d_app_name)_app_dependencies)
-d_app_target = $(d_app_name:%=%.app)
-d_app_src_dir = $(d_app_name:%=lib/%/src/)
-d_app_svn_mk = $(d_app_src_dir:%=%vsn.mk)
-d_app_src_file = $($(d_app_name)_src_file)
-d_app_file = $($(d_app_name)_file)
+bin_files = bin/start.boot bin/start.script \
+  bin/start_clean.boot bin/start_sasl.boot
 
-#
-# BUGBUG: the $(d_app_dep): $(d_app_prereq) rule is far too broad
-#         In the .erl.d file, the .beam prerequisites are handled.
-#
-# NOTE: The %.app.d ought to depend on the .erl.d files and the MIBS,
-#       etc. I.e. source files, not the beam files.
-#
-tmp/dependencies/%.app.d:
-	@mkdir -p $(dir $@)
-	@echo "$(d_app_dep): $(d_app_src_dir) $(d_app_svn_mk)" > $(d_app_dep)
-	@echo >> $(d_app_dep)
-	@echo ".PHONY: $(d_app_target)" >> $(d_app_dep)
-	@echo "$(d_app_target): $(d_app_prereq)" >> $(d_app_dep)
-	@echo >> $(d_app_dep)
-	@echo "$(d_app_file): $(d_app_src_file)" >> $(d_app_dep)
-	@echo >> $(d_app_dep)
+do-apps: $(a_appup_dests) $(erts_files) $(bin_files) \
+  $(foreach app_name,$(App_Names),$(app_name:%=%.app))
 
-d_plt_dep = $(d_app_name:%=$(dep_dir)app.%.plt.d)
-d_app_plt = $(d_app_name:%=tmp/app.%.plt)
-d_app_modules = $(foreach app_name,$(d_app_name),$(App_Beam_Files))
+$(DEV_BUILD_DONE): $(RELTOOL_CONFIG)
+	if [ -L releases ]; then rm releases; fi
+	./bin/mk_dev.esh
+	touch $(DEV_BUILD_DONE)
 
-tmp/dependencies/app.%.plt.d:
-	@mkdir -p $(dir $@)
-	@echo "$(d_app_plt): $(d_app_modules)" >> $(d_plt_dep)
+$(REL_BUILD_DONE): $(DEV_BUILD_DONE)
+	touch $(REL_BUILD_DONE)
 
-#
-# NOTE: implicit rule to compile beam files from erl source.
-#
-w_match = $*
-w_app_part = $(firstword $(subst /ebin/, ,$(w_match)))
-w_mod_part = $(lastword $(subst /ebin/, ,$(w_match)))
-w_module = $(w_app_part)$(dep_separator)$(w_mod_part)
-w_src = $($(w_module:%=%_module_erl))
-w_vsn = $($(w_module:%=%_app_vsn))
+OTP_PATH := $(ERL:%/bin/erl=%)
+ERTS ?= $(shell (cd $(OTP_PATH) && echo erts-*))
+OTP_ERTS := $(OTP_PATH)/$(ERTS)
+BUILD_INFO_FILE = $(notdir $(BUILD_INFO))
 
-lib/%.beam:
-	@mkdir -p $(dir $@)
-	$(ERLC) \
-	  $(ERLCFLAGS) \
-	  -DCOMPILE_TIME_STAMP='"$(DATE_NOW)"'\
-	  -DOTP_REL_VSN='$(OTP_REL_VSN)'\
-	  -I lib -I deps \
-	  -o $(dir $@) \
-	  $(w_src)
+ERTS_BIN ?= $(ERTS)/bin
 
-bin_file = $(mib_name:%=$(App_Mibs_Dir)%.bin)
-mib_file = $(mib_name:%=$(App_Src_Dir)%.mib)
-mib_depend = $(filter $(App_Mibs), $(shell sed -n $(mib_regexp) < $(mib_file)) )
+$(ERTS_BIN)/%:
+	@mkdir -p $(ERTS_BIN)
+	@ln -s `(type $(OTP_ERTS)/bin/$* 2>/dev/null || echo ../../$(NODETOOL_DIR)/$*)\
+		| tail -1 | awk '{ print $$NF }'` $(ERTS_BIN)/$*
 
-mib_dep_files = $(mib_depend:%=$(App_Mibs_Dir)%.bin)
+erts_files = $(ERTS_BIN)/nodetool $(ERTS_BIN)/runner $(ERTS_BIN)/env.sh \
+  $(ERTS_BIN)/escript $(ERTS_BIN)/run_erl $(ERTS_BIN)/erlexec \
+  $(ERTS_BIN)/erl $(ERTS_BIN)/beam.smp $(ERTS_BIN)/epmd
 
-#
-# NOTE: Rule to compile MIB files into .bin files. The mib_dep_files are
-#       obtained using sed and the mib_regexp above. Create one rule for
-#       each MIB file.
-#
-define app_mib_rule
-$(bin_file): $(mib_file) $(mib_dep_files)
-	@mkdir -p $$(dir $$@)
-	$$(ERLC) -I $$(dir $$@) -o $$(dir $$@) $$<
-endef
+bin/%:
+	@ln -s $(OTP_PATH)/bin/$* bin/$*
 
-$(foreach app_name, $(App_Names), $(foreach mib_name, $(App_Mibs), $(eval $(app_mib_rule)) ) )
+.PHONY: run_reltool rel_files run_tgz
 
-erl_suffix = $(mod_name:%=$(app_name)\$(dep_separator)%.erl.d)
-erl_dep_file = $(addprefix $(dep_dir),$(erl_suffix))
-app_dep_file = $(app_name:%=$(dep_dir)%.app.d)
-app_plt_file = $(app_name:%=$(dep_dir)app.%.plt.d)
+run_reltool:
+	rm -rf $(REL_PATH)
+	./bin/mk_rel.esh
 
-application_dep_files = \
-  $(foreach mod_name, $(App_Modules), $(erl_dep_file)) $(app_dep_file) $(app_plt_file)
+rel_files: run_reltool
+	cp $(erts_files) $(REL_PATH)/$(ERTS_BIN)
+	cp $(bin_files) $(REL_PATH)/bin
+	mkdir $(REL_PATH)/etc
+	cp etc/*.src etc/init.conf $(REL_PATH)/etc || true
+	rsync -l bin/*.esh $(REL_PATH)/bin
+	cp -r etc/init.d $(REL_PATH)/etc
+	@echo Copying additional folders specified in \$$rel_copy_dirs variable...
+	for dep in $(rel_copy_dirs); do rsync -r --exclude='.*' $$dep $(REL_PATH)/ ; done
 
-all_dep_files = $(foreach app_name, $(App_Names), $(application_dep_files))
+tgz_rel_name = $(shell cat $(RELEASE_DATA) 2>/dev/null || echo unknown).tgz
+TAR = $(shell which gtar || which tar)
 
-# Don't create dependency files for those targets
-ifneq ($(MAKECMDGOALS),$(filter $(MAKECMDGOALS),clean get-deps rm-deps))
--include $(all_dep_files)
-endif
+run_tgz:
+	(cd $(REL_PATH) && $(TAR) --format=ustar -czf ../$(tgz_rel_name) *)
+
+.PHONY: apps depend
+
+apps: $(foreach d_app_name,$(App_Names),$(d_app_file)) $(a_appup_dests)
+	@echo Done!
+
+depend: $(all_dep_files)
+	@echo "Dependency files regenerated"
+
+
+.PHONY: dev rel tgz
+dev: bld_deps do-apps $(DEV_BUILD_DONE)
+	@echo Done! Use \'./bin/init.esh\' to install and then \'./bin/start.esh\' to boot.
+
+rel: bld_deps do-apps $(REL_BUILD_DONE) rel_files
+	@echo Done! New release has been created in \'$(REL_PATH)\'.
+
+tgz: clean-tgz bld_deps do-apps $(REL_BUILD_DONE) rel_files run_tgz
+	@echo Done! Created file: \'$(dir $(REL_PATH))$(tgz_rel_name)\'.
+
+
+.PHONY: dev_test rel_test tgz_test
+dev_test: bld_deps_test do-apps $(DEV_BUILD_DONE)
+	@echo Done! Use \'./bin/init.esh\' to install and then \'./bin/start.esh\' to boot.
+
+rel_test: bld_deps_test do-apps $(REL_BUILD_DONE) rel_files
+	@echo Done! New release has been created in \'$(REL_PATH)\'.
+
+tgz_test: clean-tgz bld_deps_test do-apps $(REL_BUILD_DONE) rel_files run_tgz
+	@echo Done! Created file: \'$(dir $(REL_PATH))$(tgz_rel_name)\'.
+

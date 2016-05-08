@@ -54,8 +54,7 @@ $(warning $(BLDERLPATH)/ contains local changes, not updating!)
 endif # ISDIRTY
 endif # ISBLDERL-BLDISDIFF
 
-incs := common rel_app_vars deps targets configs clean debug
-include $(foreach file,$(incs),$(BLDERLPATH)/makefiles/$(file))
+include $(BLDERLPATH)/makefiles/common
 
 ifneq ($(wildcard $(CUSTOMMK)),)
 include $(CUSTOMMK)
