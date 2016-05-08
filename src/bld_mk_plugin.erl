@@ -28,15 +28,14 @@
 
 -callback handle_dep_mk(DepPath :: string(),
                         State :: any()) ->
-    'stop' | (State :: any()).
+    'stop' |
+    {'ok', (State :: any())}.
 
--callback handle_dep_mk('erl',
-                        SrcPath :: string(),
-                        Options :: list(term()),
+-callback handle_dir_mk(SrcPath :: string(),
                         State :: any()) ->
     'stop' |
     {'ignore', State :: any()} |
-    {Options :: list(term()), State :: any()}.
+    {'ok', (State :: any())}.
 
 -callback handle_src_mk('erl',
                         SrcFile :: string(),
@@ -44,4 +43,4 @@
                         State :: any()) ->
     'stop' |
     {'ignore', State :: any()} |
-    {Options :: list(term()), State :: any()}.
+    {'ok', Options :: list(term()), State :: any()}.

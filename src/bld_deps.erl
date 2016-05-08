@@ -257,17 +257,25 @@ add_profile(X, AccIn, MKProfiles) ->
 halt_no_profile(Profile) -> bld_lib:print(err_noprofile(Profile)), halt(1).
 
 err_noprofile(Profile) ->
-    [
-     "Error, profile '" ++ atom_to_list(Profile) ++ "' is not defined in the "
-     "'make_profiles' section of 'builderl' config in the 'etc/reltool.config'"
-     "file."
-    ].
+    ["Error, profile '" ++ atom_to_list(Profile) ++ "' is not defined in the"
+     ++ bld_section()].
 
-add_options({Type, Opts} = Profile, AccIn) when Type =:= ?ERL_EXT ->
+bld_section() ->
+    " 'make_profiles' section of 'builderl' config in the 'etc/reltool.config'"
+        " file.".
+
+add_options({Type, Opts} = Profile, AccIn)
+  when Type =:= make_options; Type =:= ?ERL_EXT ->
     case proplists:get_value(Type, AccIn) of
         undefined -> [Profile|AccIn];
-        List -> lists:keyreplace(Type, 1, AccIn, List ++ Opts)
-    end.
+        List -> lists:keyreplace(Type, 1, AccIn, {Type, List ++ Opts})
+    end;
+add_options({Type, _}, _) ->
+    bld_lib:print(err_unknownopts(Type)), halt(1).
+
+err_unknownopts(Type) ->
+    ["Error, unknown type of options '" ++ atom_to_list(Type) ++ "' specified "
+     "in the" ++ bld_section()].
 
 init_make(Combined) ->
     io:format("Using compilation options:~n"),
@@ -288,12 +296,12 @@ init_make(Combined) ->
 do_mk_option({pa, Path}, Acc, _MakeOpts) ->
     true = code:add_patha(Path),
     Acc;
-do_mk_option({load_mk_plugin, Src}, Acc, MakeOpts) ->
+do_mk_option({mk_plugin, Src}, Acc, MakeOpts) ->
     {Module, Binary} = erl_compile(Src),
     case code:load_binary(Module, Module, Binary) of
         {module, Mod} ->
             io:format("Loaded.~n~n"),
-            [{mk_plugin, Mod, Mod:init(MakeOpts)}|Acc];
+            [{mk_plugin_info, Mod, Mod:init(MakeOpts)}|Acc];
         {error, _} = Err ->
             Msg = "Error when loading module '~p': ~p~nAborting.~n",
             io:format(Msg, [Module, Err]),
@@ -409,8 +417,6 @@ read_deps_file(Branch) ->
 
 normalize_deps(MP, {AppDir}) ->
     normalize_deps(MP, ?DEFAULTDEPSDIR, undefined, undefined, AppDir);
-normalize_deps(MP, {Dir, AppDir}) ->
-    normalize_deps(MP, Dir, undefined, undefined, AppDir);
 normalize_deps(MP, {Tag, Cmd, AppDir}) ->
     normalize_deps(MP, ?DEFAULTDEPSDIR, Tag, Cmd, AppDir);
 normalize_deps(MP, {Dir, Tag, Cmd, AppDir}) ->

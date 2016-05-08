@@ -32,7 +32,8 @@
 
 -define(BLD_APP_MOD_RE, {builderl_generated}).
 
--record(opts, {mk_plugin, mk_state, make_opts, compiler_opts}).
+-record(opts, {mk_plugin, mk_state, make_opts, compiler_opts, redo_app}).
+-record(fi, {base, ext, file, mtime}).
 
 boot(Path, Root) ->
     start_serializer(),
@@ -82,8 +83,11 @@ format_msg(IsWarning, List) ->
     [format_line(IsWarning, File, L) || {File, Lines} <- List, L <- Lines].
 
 format_line(IsWarning, File, {Line, Module, Info}) ->
-    [File, <<":">>, integer_to_list(Line), <<": ">>, get_warning(IsWarning),
+    [File, <<":">>, get_line(Line), <<": ">>, get_warning(IsWarning),
      Module:format_error(Info), <<"\n">>].
+
+get_line(none) -> <<"">>;
+get_line(Integer) -> integer_to_list(Integer).
 
 get_warning(false) -> <<"">>;
 get_warning(true) -> <<"Warning: ">>.
@@ -97,13 +101,15 @@ get_options(Combined) ->
     end.
 
 compile_dep(Path, MakeOpts, CompilerOpts) ->
-    case lists:keyfind(mk_plugin, 1, MakeOpts) of
+    case lists:keyfind(mk_plugin_info, 1, MakeOpts) of
         false ->
             compile_dep(Path, MakeOpts, CompilerOpts, undefined, undefined);
-        {mk_plugin, Mod, State} ->
+        {mk_plugin_info, Mod, State} ->
             case Mod:handle_dep_mk(Path, State) of
-                stop -> ret_stopped(Mod, <<"handle_dep_mk/2">>, Path);
-                NState -> compile_dep(Path, MakeOpts, CompilerOpts, Mod, NState)
+                stop ->
+                    ret_stopped(Mod, <<"handle_dep_mk/2">>, Path);
+                {ok, NState} ->
+                    compile_dep(Path, MakeOpts, CompilerOpts, Mod, NState)
             end
     end.
 
@@ -121,172 +127,203 @@ ret_rest(Msg, Mod, Fun) ->
 compile_dep(Path, MakeOpts, CompilerOpts, Mod, State) ->
     SrcPath = filename:join(Path, "src"),
     case filelib:is_dir(SrcPath) of
-        true -> compile_src(Path, SrcPath, MakeOpts, CompilerOpts, Mod, State);
+        true -> compile_dep(Path, SrcPath, MakeOpts, CompilerOpts, Mod, State);
         false -> {ok, [<<"No 'src' folder in '">>, Path, <<"', ignoring.\n">>]}
     end.
 
-compile_src(Path, SrcPath, MakeOpts, CompilerOpts, Mod, State) ->
+compile_dep(Path, SrcPath, MakeOpts, CompilerOpts, Mod, State) ->
     DstPath = filename:join(Path, "ebin"),
+    Res = file:make_dir(DstPath),
+    Res =:= ok orelse Res =:= {error, eexist}
+        orelse throw({mk_dir, DstPath, element(2, Res)}),
+
     ErlOpts = [{outdir, DstPath} | proplists:get_value(erl, CompilerOpts, [])],
-    Opts = #opts{mk_plugin = Mod, mk_state = State,
-                 make_opts = MakeOpts, compiler_opts = ErlOpts},
-    if Mod =/= undefined -> do_handle_dep_mk(Path, SrcPath, DstPath, Opts);
-       true -> compile_erl(SrcPath, DstPath, Opts) end,
-    {ok, [<<"  => Finished compiling in '">>, Path, <<"'.\n">>]}.
+    Opts0 = #opts{mk_plugin = Mod, mk_state = State,
+                  make_opts = MakeOpts, compiler_opts = ErlOpts},
 
-do_handle_dep_mk(Path, SrcPath, DstPath, Opts) ->
-    #opts{mk_plugin = Mod, mk_state = State} = Opts,
-    case Mod:handle_dep_mk(erl, SrcPath, Opts#opts.compiler_opts, State) of
-        stop ->
-            throw({stop, erl, Mod, <<"handle_dep_mk/4">>, Path});
-        {ignore, NState} ->
-            Msg = "  => Ignored compilation of '~s' by '~s:handle_dep_mk/4'.~n",
-            '$bld_print' ! {Msg, [Path, Mod]},
-            Opts#opts{mk_state = NState};
-        {NErlOpts, NState} ->
-            NOpts = Opts#opts{mk_state = NState, compiler_opts = NErlOpts},
-            compile_erl(SrcPath, DstPath, NOpts)
-    end.
+    SrcPaths = [SrcPath | [filename:join(Path, X) || {spa, X} <- MakeOpts]],
+    {SrcsOrg, Opts1} = lists:foldl(fun list_src/2, {[], Opts0}, SrcPaths),
+    Srcs = lists:sort(fun fi_sort_fun/2, SrcsOrg),
+    Opts2 = compile_modules(Srcs, list_dir(DstPath, ".beam", false), Opts1),
 
-compile_erl(SrcPath, DstPath, Opts) ->
-    ensure_dir(DstPath),
-    Srcs = list_files(SrcPath, ".erl"),
-    Beams = list_files(DstPath, ".beam"),
-    MaxMTime = get_max_mtime([X || {_, X} <- Srcs]),
-    {IsDel, NOpts} =
-        compile_modules(SrcPath, DstPath, Srcs, Beams, Opts, false),
-    Modules = list_modules(DstPath),
-    lists:member(load, NOpts#opts.make_opts) =:= false
-        orelse load_modules(DstPath, Modules),
-
-    case list_files(SrcPath, ".app.src") of
-        [App] -> process_app(SrcPath, DstPath, MaxMTime, IsDel, Modules, App);
+    MaxMTime = get_max_mtime([X#fi.mtime || X <- Srcs]),
+    case list_dir(SrcPath, ".app.src", false) of
+        [App] -> process_app(App, MaxMTime, DstPath, Opts2);
         [] -> throw({no_app_src_file, SrcPath});
         _ -> throw({multiple_app_src_files, SrcPath})
     end,
-    NOpts.
+    {ok, [<<"  => Finished compiling in '">>, Path, <<"'.\n">>]}.
 
-list_file(Path, File) ->
-    FileName = filename:join(Path, File),
-    case file:read_file_info(FileName, [{time, posix}]) of
-        {ok, Info} -> {FileName, Info#file_info.mtime};
-        {error, enoent} -> {FileName, undefined}
+fi_sort_fun(A, B) -> A#fi.base =< B#fi.base.
+
+list_src(SrcPath, {Files, Opts}) ->
+    case can_compile_dir(SrcPath, Opts) of
+        {true, NOpts} -> {list_dir(SrcPath, ".erl", true) ++ Files, NOpts};
+        {false, NOpts} -> {Files, NOpts}
     end.
 
-list_files(Path, Ext) ->
-    All = filelib:wildcard("*" ++ Ext, Path),
-    Info = [{filename:basename(X, Ext), get_mtime(Path, X)} || X <- All],
-    Sort = fun({A, _}, {B, _}) -> A =< B end,
-    lists:sort(Sort, Info).
+can_compile_dir(_SrcPath, #opts{mk_plugin = undefined} = Opts) ->
+    {true, Opts};
+can_compile_dir(SrcPath, #opts{mk_plugin = Mod, mk_state = State} = Opts) ->
+    case Mod:handle_dir_mk(SrcPath, State) of
+        stop ->
+            throw({stop, erl, Mod, <<"handle_dir_mk/2">>, SrcPath});
+        {ignore, NState} ->
+            Msg = "  => Ignored compilation of '~s' by '~s:handle_dep_mk/4'.~n",
+            '$bld_print' ! {Msg, [SrcPath, Mod]},
+            {false, Opts#opts{mk_state = NState}};
+        {ok, NState} ->
+            {true, Opts#opts{mk_state = NState}}
+    end.
 
-get_mtime(Path, File) ->
-    FileName = filename:join(Path, File),
-    {ok, Info} = file:read_file_info(FileName, [{time, posix}]),
-    Info#file_info.mtime.
+list_dir(Path, Ext, Recursive) ->
+    lists:sort(fun fi_sort_fun/2, list_files(Path, Ext, Recursive)).
+
+list_files(Path, Ext, Recursive) ->
+    FFun = fun(X, AccIn) -> file_filter(X, AccIn, Ext, Path) end,
+    {Files, Dirs} = lists:foldl(FFun, {[], []}, list_dir(Path)),
+    if Dirs =:= []; Recursive =:= false ->
+            Files;
+       true ->
+            RFun = fun(X, AccIn) -> list_files(X, Ext, Recursive) ++ AccIn end,
+            lists:foldl(RFun, Files, Dirs)
+    end.
+
+list_dir(Path) ->
+    case file:list_dir(Path) of
+        {ok, List} -> List;
+        _ -> []
+    end.
+
+file_filter([$.|_], AccIn, _Ext, _Path) ->
+    AccIn;
+file_filter(Name, {Files, Dirs} = AccIn, Ext, Path) ->
+    PathName = filename:join(Path, Name),
+    case filelib:is_dir(PathName) of
+        true ->
+            {Files, [PathName|Dirs]};
+        false ->
+            case check_ext(Name, Ext) of
+                false -> AccIn;
+                {B, E} -> {[format_file(B, E, PathName)|Files], Dirs}
+            end
+    end.
+
+check_ext(Name, undefined) ->
+    case filename:extension(Name) of
+        [] -> false;
+        Ext -> {filename:rootname(Name), Ext}
+    end;
+check_ext(Name, Ext) ->
+    case lists:suffix(Ext, Name) of
+        false -> false;
+        true -> {lists:sublist(Name, length(Name) - length(Ext)), Ext}
+    end.
+
+format_file(Base, Ext, PathName) ->
+    {ok, Info} = file:read_file_info(PathName, [{time, posix}]),
+    #fi{base = Base, ext = Ext, file = PathName, mtime = Info#file_info.mtime}.
 
 get_max_mtime([]) -> undefined;
 get_max_mtime(List) -> lists:max(List).
 
-ensure_dir(Name) ->
-    case filelib:is_dir(Name) of
-        true -> ok;
-        false ->
-            case file:make_dir(Name) of
-                ok -> ok;
-                {error, Err} -> throw({mk_dir, Name, Err})
-            end
-    end.
-
 %%------------------------------------------------------------------------------
 
-%% Special case when executing from a release
-compile_modules(_, _, [], DT, Opts, _) when length(DT) > 0 ->
-    {false, Opts};
-compile_modules(Src, Dst, [{B, SM} | ST], [{B, DM} | DT], Opts, IsDel)
-  when DM > SM ->
-    compile_modules(Src, Dst, ST, DT, Opts, IsDel);
-compile_modules(Src, Dst, [{B, _} | ST], [{B, _} | DT], Opts, IsDel) ->
-    NOpts = do_compile_module(Src, B, Opts),
-    compile_modules(Src, Dst, ST, DT, NOpts, IsDel);
-compile_modules(Src, Dst, [{SB, _} | ST], [{DB, _} | _] = D, Opts, IsDel)
-  when SB < DB ->
-    NOpts = do_compile_module(Src, SB, Opts),
-    compile_modules(Src, Dst, ST, D, NOpts, IsDel);
-compile_modules(Src, Dst, [{SB, _} | ST], [] = D, Opts, IsDel) ->
-    NOpts = do_compile_module(Src, SB, Opts),
-    compile_modules(Src, Dst, ST, D, NOpts, IsDel);
-compile_modules(Src, Dst, [{SB, _} | _] = S, [{DB, _} | DT], Opts, _IsDel)
-  when DB < SB ->
-    remove_module(Dst, DB),
-    compile_modules(Src, Dst, S, DT, Opts, true);
-compile_modules(Src, Dst, [] = S, [{DB, _} | DT], Opts, _IsDel) ->
-    remove_module(Dst, DB),
-    compile_modules(Src, Dst, S, DT, Opts, true);
-compile_modules(_, _, [], [], Opts, IsDel) ->
-    {IsDel, Opts}.
+compile_modules([#fi{base = B} = Src | ST], [#fi{base = B} = Dst | DT], Opts)
+  when Dst#fi.mtime > Src#fi.mtime ->
+    compile_modules(ST, DT, Opts);
+compile_modules([#fi{base = B} = Src | ST], [#fi{base = B} = Dst | DT], Opts) ->
+    remove_module(Dst#fi.file),
+    compile_modules(ST, DT, do_compile_module(Src#fi.file, Opts));
+compile_modules([Src | ST], [Dst | _] = D, Opts)
+  when Src#fi.base < Dst#fi.base ->
+    compile_modules(ST, D, do_compile_module(Src#fi.file, Opts));
+compile_modules([Src | ST], [] = D, Opts) ->
+    compile_modules(ST, D, do_compile_module(Src#fi.file, Opts));
+compile_modules([Src | _] = S, [Dst | DT], Opts)
+  when Dst#fi.base < Src#fi.base ->
+    remove_module(Dst#fi.file),
+    compile_modules(S, DT, Opts#opts{redo_app = true});
+compile_modules([] = S, [Dst | DT], Opts) ->
+    remove_module(Dst#fi.file),
+    compile_modules(S, DT, Opts#opts{redo_app = true});
+compile_modules([], [], Opts) ->
+    Opts.
 
-do_compile_module(Dep, Name, Opts) ->
-    Src = filename:join(Dep, Name),
-    if Opts#opts.mk_plugin =/= undefined ->
-            do_handle_src_mk(Src, Opts);
-       true ->
-            do_compile_module(Src, Opts#opts.compiler_opts),
-            Opts
-    end.
-
-do_handle_src_mk(Src, #opts{mk_plugin = Mod, mk_state = State} = Opts) ->
+do_compile_module(Src, #opts{mk_plugin = undefined} = Opts) ->
+    do_compile_module1(Src, Opts#opts.compiler_opts),
+    Opts;
+do_compile_module(Src, #opts{mk_plugin = Mod, mk_state = State} = Opts) ->
     case Mod:handle_src_mk(erl, Src, Opts#opts.compiler_opts, State) of
         stop ->
-            throw({stop, erl, Mod, <<"handle_src_mk/4">>, Src ++ ".erl"});
+            throw({stop, erl, Mod, <<"handle_src_mk/4">>, Src});
         {ignore, NState} ->
-            Msg = "  => Ignored compilation of '~s.erl' by "
+            Msg = "  => Ignored compilation of '~s' by "
                 "'~s:handle_src_mk/4'.~n",
             '$bld_print' ! {Msg, [Src, Mod]},
             Opts#opts{mk_state = NState};
-        {NErlOpts, NState} ->
-            do_compile_module(Src, NErlOpts),
+        {ok, NErlOpts, NState} ->
+            do_compile_module1(Src, NErlOpts),
             Opts#opts{mk_state = NState}
     end.
 
-do_compile_module(Src, ErlOpts) ->
-    case compile:file(Src, ErlOpts) of
+do_compile_module1(Src, ErlOpts) ->
+    case compile:file(filename:rootname(Src), ErlOpts) of
         {ok, _Module} ->
-            '$bld_print' ! {"  ERL: Compiled '~s.erl'.~n", [Src]};
+            '$bld_print' ! {"  ERL: Compiled '~s'.~n", [Src]};
         {ok, _Module, []} ->
-            '$bld_print' ! {"  ERL: Compiled '~s.erl'.~n", [Src]};
+            '$bld_print' ! {"  ERL: Compiled '~s'.~n", [Src]};
         {ok, _Module, Warn} ->
             '$bld_print' ! format_msg(true, Warn) ++
-                [<<"  ERL: Compiled '">>, Src, <<".erl' with warnings!\n">>];
+                [<<"  ERL: Compiled '">>, Src, <<"' with warnings!\n">>];
         {error, Err, Warn} ->
             '$bld_print' ! format_msg(false, Err) ++ format_msg(true, Warn) ++
-                [<<"!Ignored '">>, Src, <<"erl' because of errors.\n">>],
+                [<<"!Not compiling '">>, Src, <<"' due to errors.\n">>],
             throw({compile_error, Src});
         error ->
-            Msg = "!Ignored '~s.erl' because of an unknown error.~n",
+            Msg = "!Not compiling '~s' due to an error.~n",
             '$bld_print' ! {Msg, [Src]},
             throw({compile_error, Src})
     end.
 
-remove_module(Dst, Name) ->
-    File = filename:join(Dst, Name ++ ".beam"),
-    case file:delete(File) of
-        ok -> '$bld_print' ! {"  !Deleted '~s'.~n", [File]};
-        {error, Err} -> throw({delete, File, Err})
+remove_module(Dst) ->
+    case file:delete(Dst) of
+        ok -> '$bld_print' ! {"  Deleted '~s'.~n", [Dst]};
+        {error, Err} -> throw({delete, Dst, Err})
     end.
 
 %%------------------------------------------------------------------------------
 
-process_app(SrcPath, DstPath, MaxMTime, IsDel, Modules, {AppName, Ts}) ->
-    AppDst = list_file(DstPath, AppName ++ ".app"),
-    AppSrc = {filename:join(SrcPath, AppName ++ ".app.src"), Ts},
-    compile_app(IsDel, AppSrc, AppDst, MaxMTime, Modules).
+process_app(App, MaxMTime, DstPath, Opts) ->
+    All = filelib:wildcard("*.beam", DstPath),
+    Modules = [list_to_atom(filename:rootname(X)) || X <- All],
+    lists:member(load, Opts#opts.make_opts) =:= false
+        orelse load_modules(DstPath, Modules),
+
+    AppDst = list_file(filename:join(DstPath, App#fi.base ++ ".app")),
+    AppSrc = {App#fi.file, App#fi.mtime},
+    compile_app(Opts#opts.redo_app =:= true, AppSrc, AppDst, MaxMTime, Modules).
+
+load_modules(Path, Modules) ->
+    '$bld_print' ! {"Loaded:"},
+    lists:foreach(fun(X) -> do_load_module(Path, X) end, Modules),
+    '$bld_print' ! {"~n"}.
+
+do_load_module(Path, Module) ->
+    File = filename:join(Path, Module),
+    case code:load_abs(File) of
+        {module, Mod} -> '$bld_print' ! {" ~s", [Mod]};
+        {error, Err} -> throw({load_error, File, Err})
+    end.
+
+list_file(DstApp) ->
+    case file:read_file_info(DstApp, [{time, posix}]) of
+        {ok, Info} -> {DstApp, Info#file_info.mtime};
+        {error, enoent} -> {DstApp, undefined}
+    end.
 
 compile_app(true, {Src, _}, {Dst, _}, _MaxMTime, Modules) ->
     do_compile_app(Src, Dst, Modules);
-%% Special case when executing from a release
-compile_app(false, {_, undefined}, {_, Ts}, undefined, Modules)
-  when Ts =/= undefined, length(Modules) > 0 ->
-    ok;
 compile_app(false, {Src, _}, {Dst, undefined}, _MaxMTime, Modules) ->
     do_compile_app(Src, Dst, Modules);
 compile_app(false, {Src, SrcTime}, {Dst, DstTime}, MaxMTime, Modules)
@@ -327,29 +364,10 @@ list_replace([], _What, _To, Acc) -> lists:reverse(Acc).
 
 %%------------------------------------------------------------------------------
 
-list_modules(Path) ->
-    All = filelib:wildcard("*.beam", Path),
-    Modules = [filename:basename(X, ".beam") || X <- All],
-    [list_to_atom(X) || X <- Modules].
-
-load_modules(Path, Modules) ->
-    '$bld_print' ! {"Loaded:"},
-    lists:foreach(fun(X) -> do_load_module(Path, X) end, Modules),
-    '$bld_print' ! {"~n"}.
-
-do_load_module(Path, Module) ->
-    File = filename:join(Path, Module),
-    case code:load_abs(File) of
-        {module, Mod} -> '$bld_print' ! {" ~s", [Mod]};
-        {error, Err} -> throw({load_error, File, Err})
-    end.
-
-%%------------------------------------------------------------------------------
-
 handle_err({no_app_src_file, SrcPath}) ->
     [<<"Error: No .app.src file in ">>, SrcPath, <<"\n">>];
 handle_err({multiple_app_src_files, SrcPath}) ->
-    [<<"Error: More than one .app.src file in ">>, SrcPath, <<"\n">>];
+    [<<"Error: More than one .app.src in ">>, SrcPath, <<"\n">>];
 handle_err({app_src, Src, Err}) ->
     [<<"Error reading '">>, Src, <<"', reason: ">>, to_term(Err), <<"\n">>];
 handle_err({scan_error, Src, Err, Loc}) ->
