@@ -31,7 +31,7 @@
 -define(DEPSDIR, <<"deps-versions">>).
 -define(DEFAULTDEPSDIR, <<"lib">>).
 -define(MASTER_BRANCH, "master").
--define(CMDS, [st, get, rm, mk]).
+-define(CMDS, [st, get, rm, mk, eunit]).
 
 -define(ERL_EXT, erl).
 
@@ -56,10 +56,11 @@ usage() ->
      "    separately (in parallel). Available commands:",
      "    " ++ all_cmds(),
      "   where:",
-     "    st:  git status in a dependency",
-     "    get: git clone (or fetch if exists) a dependency",
-     "    rm:  delete a dependency with rm -rf",
-     "    mk:  compile a dependency",
+     "    st:    git status in a dependency",
+     "    get:   git clone (or fetch if exists) a dependency",
+     "    rm:    delete a dependency with rm -rf",
+     "    mk:    compile a dependency",
+     "    eunit: run eunit unit tests for a dependency",
      "",
      "  -d <branch>",
      "    Default branch to use if the current directory is not a git",
@@ -130,7 +131,8 @@ start1(["-p", Profile|T], Acc) ->
 start1(["--verbose" | T], Acc) ->
     start1(T, [verbose | Acc]);
 start1([Cmd|T], Acc)
-  when Cmd =:= "st"; Cmd =:= "get"; Cmd =:= "rm"; Cmd =:= "mk" ->
+  when Cmd =:= "st"; Cmd =:= "get"; Cmd =:= "rm"; Cmd =:= "mk";
+       Cmd =:= "eunit" ->
     start1(T, [{cmd, list_to_atom(Cmd)}|Acc]);
 start1(Other, Acc) ->
     start2(Other, Acc).
@@ -194,13 +196,14 @@ do_start(Opts0) ->
     length(Cmds) > 0 orelse halt_no_cmd(),
 
     Opts1 = process_make_profiles(lists:member(mk, Cmds), Opts0),
-    {Opts2, Repos, Deps} = process_deps(Opts1),
+    Opts2 = process_test_options(lists:member(eunit, Cmds), Opts1),
+    {Opts3, Repos, Deps} = process_deps(Opts2),
 
     bld_make:start_serializer(),
     CmdsTxt = string:join([atom_to_list(X) || X <- Cmds], "; "),
     DirsTxt = string:join(Repos, " "),
     io:format("=== Executing: '~s' in repositories: ~s~n", [CmdsTxt, DirsTxt]),
-    Fun = fun(X) -> execute(Cmds, X, Opts2) end,
+    Fun = fun(X) -> execute(Cmds, X, Opts3) end,
     Res0 = lists:flatten(bld_lib:call(Fun, Deps)),
     Res1 = [X || {Cmd, _} = X <- Res0, Cmd =/= st],
     bld_make:stop_serializer(),
@@ -234,15 +237,33 @@ err_nocmd() ->
      "Use -h or --help for more information about options."
     ].
 
-process_make_profiles(IsMK, Opts0) ->
-    Profiles = [list_to_atom(X) || {profile, X} <- Opts0],
-    {Opts1, Config} = get_builderl_cfg(Opts0),
+process_make_profiles(IsMK, Opts) ->
+    combine_profiles(IsMK, Opts, [list_to_atom(X) || {profile, X} <- Opts]).
+
+combine_profiles(false, Opts, []) ->
+    Opts;
+combine_profiles(IsMK, OldOpts, Profiles) ->
+    {Opts, Config} = get_builderl_cfg(OldOpts),
     MKProfiles = proplists:get_value(make_profiles, Config, []),
     Acc0 = get_default_profile(lists:member(default, Profiles), MKProfiles),
     Fun = fun(X, AccIn) -> add_profile(X, AccIn, MKProfiles) end,
     Combined = lists:foldl(Fun, Acc0, Profiles),
-    if IsMK =:= false -> [{combined_profile, Combined}|Opts1];
-       true -> [{combined_profile, init_make(Combined)}|Opts1] end.
+    if IsMK =:= false -> [{combined_profile, Combined}|Opts];
+       true -> [{combined_profile, init_make(Combined)}|Opts] end.
+
+process_test_options(false, Opts) ->
+    Opts;
+process_test_options(true, OldOpts) ->
+    {Opts, Cfg} = get_builderl_cfg(OldOpts),
+    TestOpts = proplists:get_value(test_options, Cfg, []),
+    EUOpts = lists:filter(fun do_eunit_opts/1, TestOpts),
+    [{eunit_options, lists:filter(fun do_eunit_opts/1, EUOpts)}|Opts].
+
+do_eunit_opts({pa, Path}) ->
+    true = code:add_patha(Path),
+    false;
+do_eunit_opts(_) ->
+    true.
 
 get_default_profile(false, MKProfiles) ->
     proplists:get_value(default, MKProfiles, []);
@@ -375,7 +396,7 @@ read_deps(_, Force, Options) ->
     {Options, read_deps_file4(Force)}.
 
 read_deps_file1(Branch) ->
-    bld_lib:h_line("===" ++ binary_to_list(Branch), $=),
+    bld_lib:h_line("=== " ++ binary_to_list(Branch) ++ " ", $=),
     read_deps_file(Branch).
 
 read_deps_file2(Branch) ->
@@ -415,12 +436,12 @@ read_deps_file(Branch) ->
             halt(1)
     end.
 
-normalize_deps(MP, {AppDir}) ->
-    normalize_deps(MP, ?DEFAULTDEPSDIR, undefined, undefined, AppDir);
 normalize_deps(MP, {Tag, Cmd, AppDir}) ->
     normalize_deps(MP, ?DEFAULTDEPSDIR, Tag, Cmd, AppDir);
 normalize_deps(MP, {Dir, Tag, Cmd, AppDir}) ->
-    normalize_deps(MP, Dir, Tag, Cmd, AppDir).
+    normalize_deps(MP, Dir, Tag, Cmd, AppDir);
+normalize_deps(MP, AppDir) when is_list(AppDir), is_integer(hd(AppDir)) ->
+    normalize_deps(MP, ?DEFAULTDEPSDIR, undefined, undefined, AppDir).
 
 normalize_deps(MP, Dir, Tag, Cmd, AppDir) ->
     Path = to_binary(filename:join(Dir, AppDir)),
@@ -444,10 +465,11 @@ err_nobranch() ->
 %%------------------------------------------------------------------------------
 
 execute(Cmds, {Path, Tag, Clone}, Options) ->
-    Fun = fun(st)  -> execute_st(Path, Clone);
-             (get) -> execute_get(Path, Tag, Clone);
-             (rm)  -> execute_rm(Path, Options);
-             (mk)  -> execute_mk(Path, Options)
+    Fun = fun(st)    -> execute_st(Path, Clone);
+             (get)   -> execute_get(Path, Tag, Clone);
+             (rm)    -> execute_rm(Path, Options);
+             (mk)    -> execute_mk(Path, Options);
+             (eunit) -> execute_eunit(Path, Options)
           end,
     lists:map(fun(X) -> {X, print_result(Fun(X))} end, Cmds).
 
@@ -541,3 +563,23 @@ execute_mk(OPath, Opts) ->
     bld_make:compile(Path, Combined).
 
 %%------------------------------------------------------------------------------
+
+execute_eunit(Path, Options) ->
+    DstPath = bld_make:get_dst_path(binary_to_list(Path)),
+    true = code:add_patha(DstPath),
+    Modules = [list_to_atom(filename:rootname(X)) ||
+                  X <- filelib:wildcard("*.beam", DstPath),
+                  not lists:suffix("_tests.beam", X)],
+    EUOpts = proplists:get_value(eunit_options, Options, []),
+    lists:foreach(fun(X) -> run_test(X, EUOpts) end, Modules),
+    {ok, [<<"  => Finished in ">>, Path, <<"\n">>]}.
+
+run_test(Mod, Opts) ->
+    case eunit:test(Mod, Opts) of
+        ok -> ok;
+        {error, Err} -> test_error(Mod, Opts, Err)
+    end.
+
+test_error(Mod, Opts, Err) ->
+    M = "Error when executing eunit tests in module ~s with options ~p:~n~p~n",
+    io:format(M, [Mod, Opts, Err]).

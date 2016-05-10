@@ -36,14 +36,6 @@
 #
 #       http://make.paulandlesley.org/autodep.html
 #       http://stackoverflow.com/questions/554742/reevaluate-makefile-variables
-#
-# NOTE: By setting the environment variable $MAKE_GOAL, the target can be
-#       changed from the default goal. This trick enables the use of
-#       the Unix 'script' with the $SHELL environment set to SHELL=make, and
-#       with MAKE_GOAL=run it starts an Erlang shell with the -pa paths set.
-#       All interaction and output is then logged using 'script'. E.g:
-#
-#       MAKE_GOAL=run SHELL=$(which make) script -a "$LOG"
 
 p_name = $(firstword $(subst /, ,$*))
 p_ins_mod = $(subst $(space),$(comma),$($(p_name)_modules:%=\'%\'))

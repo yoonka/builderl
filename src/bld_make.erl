@@ -24,7 +24,7 @@
 
 -module(bld_make).
 
--export([boot/2, compile/2]).
+-export([boot/2, compile/2, get_dst_path/1]).
 -export([start_serializer/0, stop_serializer/0]).
 
 -include_lib("kernel/include/file.hrl").
@@ -40,7 +40,7 @@ boot(Path, Root) ->
     try
         CompilerOpts = [{erl, [verbose, report, {i, Root}, {i, "lib"}]}],
         compile_dep(Path, [], CompilerOpts, undefined, ok),
-        load_modules(get_dst_path(Path))
+        true = code:add_patha(get_dst_path(Path))
     catch
         throw:Err -> io:format(standard_io, handle_err(Err), []), halt(1)
     end,
@@ -94,21 +94,6 @@ get_warning(false) -> <<"">>;
 get_warning(true) -> <<"Warning: ">>.
 
 get_dst_path(Path) -> filename:join(Path, "ebin").
-
-list_modules(P) ->
-    [list_to_atom(filename:rootname(X)) || X <- filelib:wildcard("*.beam", P)].
-
-load_modules(DstPath) ->
-    '$bld_print' ! {"Loaded:"},
-    lists:foreach(fun(X) -> load_mod(DstPath, X) end, list_modules(DstPath)),
-    '$bld_print' ! {"~n"}.
-
-load_mod(DstPath, Module) ->
-    File = filename:join(DstPath, Module),
-    case code:load_abs(File) of
-        {module, Mod} -> '$bld_print' ! {" ~s", [Mod]};
-        {error, Err} -> throw({load_error, File, Err})
-    end.
 
 %%------------------------------------------------------------------------------
 
@@ -359,6 +344,9 @@ list_replace([What|T], What, To, Acc) -> list_replace(T, What, To, [To|Acc]);
 list_replace([X|T], What, To, Acc) -> list_replace(T, What, To, [X|Acc]);
 list_replace([], _What, _To, Acc) -> lists:reverse(Acc).
 
+list_modules(P) ->
+    [list_to_atom(filename:rootname(X)) || X <- filelib:wildcard("*.beam", P)].
+
 %%------------------------------------------------------------------------------
 
 handle_err({no_app_src_file, SrcPath}) ->
@@ -380,8 +368,6 @@ handle_err({mk_dir, Name, Err}) ->
     [<<"Error, couldn't create the folder '">>, Name, <<"': ">>,
      to_term(Err), <<"\n">>];
 handle_err({delete, File, Err}) ->
-    [<<"Error when deleting file '">>, File, <<"': ">>, to_term(Err), <<"\n">>];
-handle_err({load_error, File, Err}) ->
-    [<<"\nError loading module '">>, File, <<"': ">>, to_term(Err), <<"\n">>].
+    [<<"Error when deleting file '">>, File, <<"': ">>, to_term(Err), <<"\n">>].
 
 to_term(X) -> io_lib:format("~p", [X]).

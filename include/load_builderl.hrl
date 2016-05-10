@@ -35,19 +35,17 @@
 load_builderl() ->
     {ok, Cwd} = file:get_cwd(),
     DepPath = filename:join(Cwd, ?BUILDERLLINK),
-    io:format("== Loading 'builderl' from '~s' ==~n", [DepPath]),
 
     %% Just try to load and compile on-the-fly if needed
     %% Proper compilation will be done in bld_make anyway
     case code:load_abs(filename:join([DepPath, "ebin", ?BOOTMODULE])) of
-        {module, Mod} ->
-            io:format("Pre-loaded: ~p~n", [Mod]);
+        {module, _Mod} ->
+            ok;
         _ ->
             File = filename:join([Cwd, ?BUILDERLLINK, "src", ?BOOTMODULE]),
             case compile:file(File, [binary, report]) of
                 {ok, Mod, Bin} ->
-                    {module, Mod} = code:load_binary(Mod, File ++ ".erl", Bin),
-                    io:format("Compiled and loaded: '~p'.~n", [Mod]);
+                    {module, _Mod} = code:load_binary(Mod, File ++ ".erl", Bin);
                 Err ->
                     io:format("Error when loading '~s': ~p~n.", [File, Err]),
                     halt(1)
@@ -56,4 +54,4 @@ load_builderl() ->
 
     bld_make:boot(DepPath, ?BUILDERLROOT),
 
-    io:format("== Loading 'builderl' finished. ==~n").
+    io:format("== Using 'builderl' from '~s' ==~n", [DepPath]).

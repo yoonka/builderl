@@ -100,6 +100,25 @@ clean-builderl:
 
 #-------------------------------------------------------------------------------
 
+OTP_PATH := $(ERL:%/bin/erl=%)
+ERTS ?= $(shell (cd $(OTP_PATH) && echo erts-*))
+OTP_ERTS := $(OTP_PATH)/$(ERTS)
+BUILD_INFO_FILE = $(notdir $(BUILD_INFO))
+
+ERTS_BIN ?= $(ERTS)/bin
+
+$(ERTS_BIN)/%:
+	@mkdir -p $(ERTS_BIN)
+	@ln -s `(type $(OTP_ERTS)/bin/$* 2>/dev/null || echo ../../$(NODETOOL_DIR)/$*)\
+		| tail -1 | awk '{ print $$NF }'` $(ERTS_BIN)/$*
+
+bin/%:
+	@ln -s $(OTP_PATH)/bin/$* bin/$*
+
+erts_files = $(ERTS_BIN)/nodetool $(ERTS_BIN)/runner $(ERTS_BIN)/env.sh \
+  $(ERTS_BIN)/escript $(ERTS_BIN)/run_erl $(ERTS_BIN)/erlexec \
+  $(ERTS_BIN)/erl $(ERTS_BIN)/beam.smp $(ERTS_BIN)/epmd
+
 bin_files = bin/start.boot bin/start.script \
   bin/start_clean.boot bin/start_sasl.boot
 
@@ -113,25 +132,6 @@ $(DEV_BUILD_DONE): $(RELTOOL_CONFIG)
 
 $(REL_BUILD_DONE): $(DEV_BUILD_DONE)
 	touch $(REL_BUILD_DONE)
-
-OTP_PATH := $(ERL:%/bin/erl=%)
-ERTS ?= $(shell (cd $(OTP_PATH) && echo erts-*))
-OTP_ERTS := $(OTP_PATH)/$(ERTS)
-BUILD_INFO_FILE = $(notdir $(BUILD_INFO))
-
-ERTS_BIN ?= $(ERTS)/bin
-
-$(ERTS_BIN)/%:
-	@mkdir -p $(ERTS_BIN)
-	@ln -s `(type $(OTP_ERTS)/bin/$* 2>/dev/null || echo ../../$(NODETOOL_DIR)/$*)\
-		| tail -1 | awk '{ print $$NF }'` $(ERTS_BIN)/$*
-
-erts_files = $(ERTS_BIN)/nodetool $(ERTS_BIN)/runner $(ERTS_BIN)/env.sh \
-  $(ERTS_BIN)/escript $(ERTS_BIN)/run_erl $(ERTS_BIN)/erlexec \
-  $(ERTS_BIN)/erl $(ERTS_BIN)/beam.smp $(ERTS_BIN)/epmd
-
-bin/%:
-	@ln -s $(OTP_PATH)/bin/$* bin/$*
 
 .PHONY: run_reltool rel_files run_tgz
 
@@ -155,7 +155,7 @@ TAR = $(shell which gtar || which tar)
 run_tgz:
 	(cd $(REL_PATH) && $(TAR) --format=ustar -czf ../$(tgz_rel_name) *)
 
-.PHONY: apps depend
+.PHONY: apps depend start stop
 
 apps: $(foreach d_app_name,$(App_Names),$(d_app_file)) $(a_appup_dests)
 	@echo Done!
@@ -163,6 +163,11 @@ apps: $(foreach d_app_name,$(App_Names),$(d_app_file)) $(a_appup_dests)
 depend: $(all_dep_files)
 	@echo "Dependency files regenerated"
 
+start:
+	./bin/start.esh
+
+stop:
+	./bin/stop.esh
 
 .PHONY: dev rel tgz
 dev: bld_deps do-apps $(DEV_BUILD_DONE)
@@ -175,7 +180,10 @@ tgz: clean-tgz bld_deps do-apps $(REL_BUILD_DONE) rel_files run_tgz
 	@echo Done! Created file: \'$(dir $(REL_PATH))$(tgz_rel_name)\'.
 
 
-.PHONY: dev_test rel_test tgz_test
+.PHONY: test dev_test rel_test tgz_test
+test: bld_deps_test do-apps
+	@echo Done! Use \'./bin/deps.esh eunit\' to run unit tests.
+
 dev_test: bld_deps_test do-apps $(DEV_BUILD_DONE)
 	@echo Done! Use \'./bin/init.esh\' to install and then \'./bin/start.esh\' to boot.
 
