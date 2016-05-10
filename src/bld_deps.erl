@@ -260,10 +260,16 @@ process_test_options(true, OldOpts) ->
     [{eunit_options, lists:filter(fun do_eunit_opts/1, EUOpts)}|Opts].
 
 do_eunit_opts({pa, Path}) ->
-    true = code:add_patha(Path),
+    code:add_patha(Path) =:= true orelse halt_eunitpa(Path),
     false;
 do_eunit_opts(_) ->
     true.
+
+halt_eunitpa(Path) -> bld_lib:print(err_eunitpa(Path)), halt(1).
+
+err_eunitpa(Path) ->
+    ["Error, path '" ++ Path ++ "' specified in 'test_options' in the "
+     "'etc/reltool.config' file doesn't exist."].
 
 get_default_profile(false, MKProfiles) ->
     proplists:get_value(default, MKProfiles, []);
