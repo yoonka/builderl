@@ -473,7 +473,7 @@ err_nobranch() ->
 execute(Cmds, {Path, Tag, Clone}, Options) ->
     Fun = fun(st)    -> execute_st(Path, Clone);
              (get)   -> execute_get(Path, Tag, Clone);
-             (rm)    -> execute_rm(Path, Options);
+             (rm)    -> execute_rm(Path, Clone, Options);
              (mk)    -> execute_mk(Path, Options);
              (eunit) -> execute_eunit(Path, Options)
           end,
@@ -535,20 +535,22 @@ format_get(Path, {_, List}) -> {error, format_error(error, Path, List, [])}.
 
 %%------------------------------------------------------------------------------
 
-execute_rm(Path, Options) ->
+execute_rm(Path, Clone, Options) ->
     Force = lists:member(force, Options),
-    execute_rm(Path, Force, bld_cmd:git_status(Path)).
+    execute_rm(Path, Clone, Force, bld_cmd:git_status(Path)).
 
-execute_rm(Path, _, false) ->
+execute_rm(Path, undefined, _Force, _) ->
+    no_repository(Path);
+execute_rm(Path, _Clone, _Force, false) ->
     not_a_directory(Path);
-execute_rm(Path, _, {0, []}) ->
+execute_rm(Path, _Clone, _Force, {0, []}) ->
     case format_rm(Path, false, do_rm(Path)) of
         {ok, _} = RetOK -> RetOK;
         {error, Lines} -> {error, format_error(error, Path, Lines, [])}
     end;
-execute_rm(Path, false, Err) ->
+execute_rm(Path, _Clone, false, Err) ->
     {error, format_error(Path, Err)};
-execute_rm(Path, true, Err) ->
+execute_rm(Path, _Clone, true, Err) ->
     LineSep = <<"\n---\n">>,
     case format_rm(Path, true, do_rm(Path)) of
         {ok, Lines} -> {ok, format_error(Path, Err, [LineSep|Lines])};
